@@ -4,3 +4,7 @@ backgroundColor = "#0e1117"  # Dark background
 secondaryBackgroundColor = "#262730"  # Dark secondary
 textColor = "#fafafa"  # Light text
 font="sans-serif"
+
+[supabase]
+url = "https://ocubcwzfgqzqopgsaycm.supabase.co"
+anon_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9jdWJjd3pmZ3F6cW9wZ3NheWNtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQwNDI0ODUsImV4cCI6MjA0OTYxODQ4NX0.p6RH_vX7wyULsK2r7A20HAvnmpB6urB844b8JUnXQU4"
