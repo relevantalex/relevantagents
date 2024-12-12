@@ -61,34 +61,34 @@ class DocumentProcessor:
             return False
 
     @staticmethod
-def get_recommended_json_structure() -> Dict:
-    """Return the recommended JSON structure for different document types"""
-    return {
-        "competitor_analysis": {
-            "company_name": "string",
-            "market_segment": "string",
-            "target_audience": ["string"],
-            "key_products": ["string"],
-            "pricing_tier": "string",  # low, medium, high, enterprise
-            "geographical_focus": ["string"],
-            "revenue_model": "string",
-            "customer_acquisition_channels": ["string"],
-            "technology_stack": ["string"],
-            "key_differentiators": ["string"],
-            "market_positioning": {
-                "price_point": "number",  # 1-10 scale
-                "quality": "number",
-                "innovation": "number",
-                "market_share": "number"
+    def get_recommended_json_structure() -> Dict:
+        """Return the recommended JSON structure for different document types"""
+        return {
+            "competitor_analysis": {
+                "company_name": "string",
+                "market_segment": "string",
+                "target_audience": ["string"],
+                "key_products": ["string"],
+                "pricing_tier": "string",  # low, medium, high, enterprise
+                "geographical_focus": ["string"],
+                "revenue_model": "string",
+                "customer_acquisition_channels": ["string"],
+                "technology_stack": ["string"],
+                "key_differentiators": ["string"],
+                "market_positioning": {
+                    "price_point": "number",  # 1-10 scale
+                    "quality": "number",
+                    "innovation": "number",
+                    "market_share": "number"
+                },
+                "strengths": ["string"],
+                "weaknesses": ["string"],
+                "unfilled_gaps": ["string"]  # Key for niche identification
             },
-            "strengths": ["string"],
-            "weaknesses": ["string"],
-            "unfilled_gaps": ["string"]  # Key for niche identification
-        },
-        "market_research": {
-            "segment": "string",
-            "target_audience": ["string"],
-            "pain_points": ["string"],
-            "opportunities": ["string"]
+            "market_research": {
+                "segment": "string",
+                "target_audience": ["string"],
+                "pain_points": ["string"],
+                "opportunities": ["string"]
+            }
         }
-    }
