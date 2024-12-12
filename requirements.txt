@@ -10,3 +10,4 @@ duckduckgo-search>=4.4
 Pillow==11.0.0
 python-dotenv>=1.0.0
 supabase>=2.3.0  # Add this line to your existing requirements.txt
+PyPDF2>=3.0.0
