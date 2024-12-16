@@ -81,8 +81,9 @@ def main():
             pitch = st.text_area(
                 "One-Sentence Pitch",
                 value=selected_startup.get('pitch', ''),
-                help="Describe what your startup does in one sentence",
-                max_chars=200,
+                help="Describe what your startup does (up to 400 characters)",
+                max_chars=400,
+                height=100,
                 placeholder="e.g., We provide AI-powered analytics for small businesses"
             )
             
