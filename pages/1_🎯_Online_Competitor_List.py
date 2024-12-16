@@ -255,8 +255,15 @@ def main():
         with st.spinner("Analyzing market..."):
             try:
                 # Get competitors using DuckDuckGo search
-                competitors = find_competitors(selected_startup['industry'], selected_startup.get('pitch', ''))
-                st.session_state.competitors = {selected_startup['industry']: competitors}
+                startup_industry = selected_startup.get('industry', '')
+                startup_pitch = selected_startup.get('pitch', '')
+                
+                if not startup_industry and not startup_pitch:
+                    st.error("Please add industry or pitch information in the Startup Manager first.")
+                    return
+                
+                competitors = find_competitors(startup_industry or startup_pitch, startup_pitch)
+                st.session_state.competitors = {startup_industry or "General": competitors}
                 st.success("Market analysis completed!")
                 st.rerun()
             except Exception as e:
