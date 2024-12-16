@@ -1,13 +1,11 @@
 import streamlit as st
+import pandas as pd
 from database import Database
+from document_processor import DocumentProcessor
+from typing import Dict, List
 import json
 import uuid
-from PIL import Image
-import PyPDF2
-import tempfile
-import requests
-from io import BytesIO
-from typing import Dict, List
+import fitz  # PyMuPDF
 
 st.set_page_config(
     page_title="Document Manager",
@@ -30,7 +28,7 @@ def main():
     st.title("Document Manager")
     
     db = Database()
-    doc_processor = Database()
+    doc_processor = DocumentProcessor()
     
     # Startup selector or creator
     with st.sidebar:
