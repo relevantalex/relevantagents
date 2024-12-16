@@ -29,27 +29,33 @@ def main():
     
     # Sidebar navigation
     with st.sidebar:
-        # Add some spacing at the top
-        st.markdown("<br><br>", unsafe_allow_html=True)
+        # Empty space to push startup selection to bottom
+        st.markdown("""
+            <style>
+                section[data-testid="stSidebar"] > div {
+                    height: 100vh;
+                    display: flex;
+                    flex-direction: column;
+                }
+                .startup-section {
+                    margin-top: auto;
+                    padding: 20px 0;
+                }
+            </style>
+        """, unsafe_allow_html=True)
         
-        # Move startup selection to the bottom with spacing
-        st.markdown("""<style>
-            .startup-section {
-                position: fixed;
-                bottom: 40px;
-                padding: 20px 0;
-                width: 250px;  /* Adjust based on your sidebar width */
-                background: transparent;
-            }
-        </style>""", unsafe_allow_html=True)
+        # Add empty space
+        st.empty()
+        st.empty()
+        st.empty()
         
+        # Startup selection at the bottom
         st.markdown('<div class="startup-section">', unsafe_allow_html=True)
-        # Startup selection
         st.subheader("Startup Selection")
         startups = db.get_startups()
         if startups:
             startup_names = [s['name'] for s in startups]
-            selected_startup_name = st.selectbox("Select Startup", startup_names)
+            selected_startup_name = st.selectbox("Select Startup", startup_names, label_visibility="collapsed")
         else:
             st.warning("No startups found. Create one first!")
             return
