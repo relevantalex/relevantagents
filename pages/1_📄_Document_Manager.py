@@ -5,7 +5,6 @@ from document_processor import DocumentProcessor
 from typing import Dict, List
 import json
 import uuid
-import fitz  # PyMuPDF
 
 st.set_page_config(
     page_title="Document Manager",
