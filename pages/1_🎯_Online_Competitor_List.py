@@ -111,75 +111,171 @@ def identify_industries(pitch: str) -> List[str]:
         logger.error(f"Industry identification failed: {str(e)}")
         return ["Technology Solutions", "Software Services", "Digital Innovation"]
 
+def scrape_website_content(url: str) -> Dict[str, str]:
+    """Scrape website content and extract relevant information"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Remove script and style elements
+        for script in soup(["script", "style"]):
+            script.decompose()
+            
+        # Extract text content
+        text = soup.get_text(separator=' ', strip=True)
+        
+        # Get meta descriptions
+        meta_desc = ""
+        meta_tag = soup.find("meta", attrs={"name": "description"}) or soup.find("meta", attrs={"property": "og:description"})
+        if meta_tag:
+            meta_desc = meta_tag.get("content", "")
+            
+        # Get title
+        title = soup.title.string if soup.title else ""
+        
+        # Clean and normalize text
+        text = re.sub(r'\s+', ' ', text)
+        text = text[:10000]  # Limit text length
+        
+        return {
+            "title": title,
+            "meta_description": meta_desc,
+            "content": text
+        }
+    except Exception as e:
+        logger.error(f"Failed to scrape website {url}: {str(e)}")
+        return None
+
+def is_news_site(website_data: Dict[str, str]) -> bool:
+    """Check if the website is a news outlet"""
+    news_indicators = [
+        'news', 'magazine', 'media', 'press', 'journal', 'blog', 'post',
+        'article', 'editorial', 'newsletter', 'daily', 'weekly', 'tribune',
+        'times', 'gazette', 'herald', 'chronicle', 'observer', 'digest',
+        'report', 'wire', 'feed', 'bulletin'
+    ]
+    
+    # Check domain and content for news indicators
+    text_to_check = f"{website_data['title']} {website_data['meta_description']}".lower()
+    
+    # Check for news-related words
+    for indicator in news_indicators:
+        if indicator in text_to_check:
+            return True
+            
+    # Check for typical news site patterns
+    if re.search(r'breaking\s+news|latest\s+news|top\s+stories', website_data['content'].lower()):
+        return True
+        
+    return False
+
+def validate_competitor(website_data: Dict[str, str], industry: str, startup_pitch: str) -> Tuple[bool, str, str]:
+    """Validate if a website belongs to a legitimate competitor in the specified industry"""
+    ai = AIProvider()
+    
+    validation_prompt = f"""Analyze this potential competitor:
+    Title: {website_data['title']}
+    Description: {website_data['meta_description']}
+    Website Content: {website_data['content'][:2000]}
+    
+    Target Industry: {industry}
+    Our Startup's Pitch: {startup_pitch}
+    
+    Perform the following checks and return a JSON object with these fields:
+    1. is_company: Is this a real company (not a news site, blog, or general website)?
+    2. is_competitor: Does it compete in our target industry?
+    3. company_description: Write a detailed 2-sentence description of their core product/service
+    4. differentiator: Their key advantage or unique selling point
+    5. relevance_score: Rate from 0-100 how relevant they are as a competitor
+    
+    Return ONLY the JSON object, no other text."""
+    
+    try:
+        response = ai.generate_response(validation_prompt)
+        validation = json.loads(clean_json_response(response))
+        
+        is_valid = validation['is_company'] and validation['is_competitor'] and validation['relevance_score'] >= 70
+        return (is_valid, validation['company_description'], validation['differentiator'])
+    except Exception as e:
+        logger.error(f"Competitor validation failed: {str(e)}")
+        return (False, "", "")
+
 def find_competitors(industry: str, pitch: str, progress_bar) -> List[Dict]:
     """Find competitors using AI and web search"""
     ai = AIProvider()
+    all_competitors = set()  # Track all competitors to avoid duplicates
     
     try:
         progress_bar.progress(0.1, "🔍 Generating intelligent search query...")
-        # Generate search query
         search_prompt = f"""For a startup in {industry} with this pitch: "{pitch}"
-        Create a search query to find direct competitors.
-        Return only the search query text, nothing else."""
+        Create 3 different search queries to find direct competitors.
+        Return a JSON array of 3 queries.
+        Make them specific and targeted to find actual companies, not news or general results.
+        Return ONLY the JSON array, no other text."""
 
-        search_query = ai.generate_response(search_prompt).strip().strip('"')
+        queries = json.loads(clean_json_response(ai.generate_response(search_prompt)))
         
-        progress_bar.progress(0.3, "🌐 Scanning market landscape...")
-        # Perform search
-        with DDGS() as ddgs:
-            results = list(ddgs.text(search_query, max_results=15))
+        valid_competitors = []
+        for query_idx, search_query in enumerate(queries):
+            progress_bar.progress(0.2 + 0.2 * query_idx, f"🌐 Scanning market with query {query_idx + 1}/3...")
             
-            progress_bar.progress(0.5, "🤖 Validating potential competitors...")
-            # First pass: Identify potential companies
-            validation_prompt = f"""Analyze these search results:
-            {json.dumps(results)}
+            # Perform search
+            with DDGS() as ddgs:
+                results = list(ddgs.text(search_query, max_results=10))
+                
+                # Process each result
+                for result_idx, result in enumerate(results):
+                    progress_value = 0.3 + 0.5 * (query_idx * len(results) + result_idx) / (len(queries) * len(results))
+                    progress_bar.progress(progress_value, f"🔍 Analyzing potential competitor {result_idx + 1}/10...")
+                    
+                    # Extract domain from result
+                    try:
+                        domain = urlparse(result['link']).netloc
+                        if not domain:
+                            continue
+                            
+                        # Skip if we've already processed this domain
+                        if domain in all_competitors:
+                            continue
+                            
+                        all_competitors.add(domain)
+                        
+                        # Scrape website
+                        website_data = scrape_website_content(result['link'])
+                        if not website_data:
+                            continue
+                            
+                        # Check if it's a news site
+                        if is_news_site(website_data):
+                            continue
+                            
+                        # Validate competitor
+                        is_valid, description, differentiator = validate_competitor(website_data, industry, pitch)
+                        if is_valid:
+                            valid_competitors.append({
+                                "name": website_data['title'].split('|')[0].strip(),
+                                "website": result['link'],
+                                "description": description,
+                                "differentiator": differentiator
+                            })
+                            
+                        if len(valid_competitors) >= 3:
+                            break
+                            
+                    except Exception as e:
+                        logger.error(f"Error processing result: {str(e)}")
+                        continue
+                        
+                if len(valid_competitors) >= 3:
+                    break
             
-            First, identify which results are actual companies with products/services (not news sites, blogs, or general websites).
-            Return a JSON array of indices of valid company results.
-            Example: [0, 2, 5, 8]
-            
-            Return ONLY the JSON array, no other text."""
-            
-            valid_indices_response = ai.generate_response(validation_prompt)
-            valid_indices = json.loads(clean_json_response(valid_indices_response))
-            valid_results = [results[i] for i in valid_indices if i < len(results)]
-            
-            progress_bar.progress(0.7, "📊 Performing deep competitive analysis...")
-            # Second pass: Detailed analysis of valid companies
-            analysis_prompt = f"""Analyze these validated competitors in {industry}:
-            {json.dumps(valid_results)}
-            
-            Identify the top 3 most relevant direct competitors.
-            For each competitor, verify they are:
-            1. Real companies (not news sites or blogs)
-            2. Have actual products or services
-            3. Operate in the same market segment
-            
-            Return a JSON array with exactly 3 companies, each containing:
-            {{
-                "name": "Company Name",
-                "website": "company website",
-                "description": "2-sentence description focusing on their product/service",
-                "differentiator": "key unique selling point vs your startup"
-            }}
-            
-            Return ONLY the JSON array, no other text."""
-
-            competitor_analysis = ai.generate_response(analysis_prompt)
-            competitors = json.loads(clean_json_response(competitor_analysis))
-            
-            progress_bar.progress(0.9, "🔗 Validating company information...")
-            # Clean URLs
-            for comp in competitors:
-                if comp.get('website'):
-                    parsed_url = urlparse(comp['website'])
-                    domain = parsed_url.netloc if parsed_url.netloc else parsed_url.path
-                    if not domain.startswith('www.'):
-                        domain = f"www.{domain}"
-                    comp['website'] = f"https://{domain}"
-            
-            progress_bar.progress(1.0, "✅ Analysis complete!")
-            return competitors[:3]
+        progress_bar.progress(1.0, "✅ Analysis complete!")
+        return valid_competitors[:3]
             
     except Exception as e:
         logger.error(f"Competitor search failed: {str(e)}")
