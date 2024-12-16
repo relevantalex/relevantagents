@@ -509,6 +509,10 @@ def main():
     if 'industries' not in st.session_state:
         st.session_state.industries = None
     
+    # Debug logging
+    st.sidebar.write("Debug Info:")
+    st.sidebar.json(st.session_state.competitors)
+    
     # Sidebar for startup selection
     with st.sidebar:
         st.subheader("Startup Selection")
@@ -548,7 +552,7 @@ def main():
                     st.write("Analyzing your startup's market positioning...")
                     industries = identify_industries(selected_startup.get('pitch', ''))
                     st.session_state.industries = industries
-                    st.session_state.competitors = {}
+                    st.session_state.competitors = {}  # Reset competitors
                     status.update(label="✅ Phase 1: Industry Analysis - Complete", state="complete")
                     
                     # Show identified industries
@@ -558,21 +562,30 @@ def main():
                 
                 # Competitor Analysis
                 with st.status("🔍 Phase 2: Competitor Analysis", expanded=True) as status:
-                    # Create progress bars for each industry
                     progress_bars = {}
                     
                     for industry in industries:
                         st.write(f"\n**Analyzing {industry}**")
                         progress_bars[industry] = st.progress(0, f"Starting analysis for {industry}...")
                         
-                        competitors = find_competitors(industry, selected_startup.get('pitch', ''), progress_bars[industry])
-                        st.session_state.competitors[industry] = competitors
+                        try:
+                            competitors = find_competitors(industry, selected_startup.get('pitch', ''), progress_bars[industry])
+                            if competitors:  # Only add if we found competitors
+                                st.session_state.competitors[industry] = competitors
+                                st.write(f"Found {len(competitors)} competitors for {industry}")
+                            else:
+                                st.warning(f"No valid competitors found for {industry}")
+                        except Exception as e:
+                            st.error(f"Error analyzing {industry}: {str(e)}")
+                            continue
                     
                     status.update(label="✅ Phase 2: Competitor Analysis - Complete", state="complete")
                 
                 st.success("🎉 Market Analysis Successfully Completed!")
-                time.sleep(0.5)  # Brief pause for feedback
-                st.rerun()  # Using st.rerun() instead of experimental_rerun
+                st.write("Debug: Current competitors in state:")
+                st.json(st.session_state.competitors)
+                time.sleep(1)
+                st.rerun()
 
         except Exception as e:
             st.error(f"Error during market analysis: {str(e)}")
@@ -581,6 +594,10 @@ def main():
     if st.session_state.industries and st.session_state.competitors:
         st.divider()
         st.subheader("📊 Analysis Results")
+        
+        # Debug info
+        st.write("Debug: Industries:", st.session_state.industries)
+        st.write("Debug: Competitors:", st.session_state.competitors)
         
         # Create tabs for industries
         tabs = st.tabs(st.session_state.industries)
@@ -592,15 +609,16 @@ def main():
                 if industry in st.session_state.competitors:
                     competitors = st.session_state.competitors[industry]
                     if competitors:
+                        st.write(f"Found {len(competitors)} competitors for {industry}")
                         for competitor in competitors:
                             render_competitor_card(competitor)
                     else:
                         st.info(f"No competitors found for {industry}")
                 else:
-                    st.info(f"Analysis pending for {industry}")
+                    st.info(f"No competitors found for {industry}")
         
         # Export section
-        if st.session_state.competitors:
+        if any(st.session_state.competitors.values()):
             st.divider()
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
