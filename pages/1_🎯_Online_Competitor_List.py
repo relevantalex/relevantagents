@@ -51,10 +51,10 @@ class AIProvider:
     def __init__(self):
         self.provider = "openai"  # Default to OpenAI
         
-        # Get API keys from environment variables
-        openai.api_key = os.getenv("OPENAI_API_KEY")
+        # Try environment variable first, then fall back to Streamlit secrets
+        openai.api_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY")
         if not openai.api_key:
-            raise ValueError("OPENAI_API_KEY environment variable is not set")
+            raise ValueError("OpenAI API key not found in environment variables or Streamlit secrets")
             
         self.model = "gpt-4-turbo-preview"
 
