@@ -1,13 +1,13 @@
 streamlit==1.12.0
-pandas>=2.2.0
-requests>=2.31.0
-beautifulsoup4>=4.12.0
-plotly>=5.18.0
-python-dateutil>=2.8.2
-openai>=1.12.0
-anthropic>=0.18.1
+altair==4.2.2
+pandas
+numpy
+requests
+beautifulsoup4
+plotly
+openai
+anthropic
+supabase
+python-dotenv
 duckduckgo-search>=4.4
-Pillow==11.0.0
-python-dotenv>=1.0.0
-supabase>=2.3.0  # Add this line to your existing requirements.txt
 PyPDF2>=3.0.0
