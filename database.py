@@ -136,3 +136,34 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error fetching documents: {str(e)}")
             raise
+
+    @staticmethod
+    def get_recommended_json_structure():
+        """Get recommended JSON structure for different document types."""
+        return {
+            "competitor_analysis": {
+                "company_name": "string",
+                "website": "string",
+                "products": ["string"],
+                "strengths": ["string"],
+                "weaknesses": ["string"],
+                "opportunities": ["string"],
+                "threats": ["string"]
+            },
+            "market_research": {
+                "market_size": "number",
+                "growth_rate": "number",
+                "key_players": ["string"],
+                "trends": ["string"],
+                "challenges": ["string"]
+            }
+        }
+
+    def validate_json_structure(self, content: Dict, expected_fields: List[str]) -> bool:
+        """Validate JSON structure against expected fields."""
+        try:
+            content_fields = set(content.keys())
+            expected_fields = set(expected_fields)
+            return content_fields.issuperset(expected_fields)
+        except:
+            return False

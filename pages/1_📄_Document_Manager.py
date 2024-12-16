@@ -1,8 +1,5 @@
 import streamlit as st
-import pandas as pd
-from database import DatabaseManager
-from document_processor import DocumentProcessor
-from typing import Dict, List
+from database import Database
 import json
 import uuid
 from PIL import Image
@@ -10,6 +7,7 @@ import PyPDF2
 import tempfile
 import requests
 from io import BytesIO
+from typing import Dict, List
 
 st.set_page_config(
     page_title="Document Manager",
@@ -23,7 +21,7 @@ def show_json_guide():
     When uploading JSON files, please follow these structures:
     """)
     
-    structures = DocumentProcessor.get_recommended_json_structure()
+    structures = Database.get_recommended_json_structure()
     for doc_type, structure in structures.items():
         with st.expander(f"{doc_type.replace('_', ' ').title()} Structure"):
             st.code(json.dumps(structure, indent=2), language="json")
@@ -31,8 +29,8 @@ def show_json_guide():
 def main():
     st.title("Document Manager")
     
-    db = DatabaseManager()
-    doc_processor = DocumentProcessor()
+    db = Database()
+    doc_processor = Database()
     
     # Startup selector or creator
     with st.sidebar:
@@ -99,7 +97,7 @@ def main():
                     
                     # For JSON files, validate structure if needed
                     if metadata["format"] == "json" and doc_type in ["competitor_analysis", "market_research"]:
-                        expected_fields = DocumentProcessor.get_recommended_json_structure()[doc_type].keys()
+                        expected_fields = Database.get_recommended_json_structure()[doc_type].keys()
                         if not doc_processor.validate_json_structure(content, expected_fields):
                             st.error("JSON structure does not match the recommended format!")
                             return
