@@ -62,62 +62,53 @@ def main():
         
         with col1:
             st.header("Upload Documents")
+            
+            # File uploader with guidelines in the tooltip
             uploaded_file = st.file_uploader(
                 "Choose a file",
                 type=["pdf", "txt", "json"],
-                help="Upload pitch decks, transcripts, or other relevant documents"
+                help="""Supported formats:
+• PDF: Pitch decks, presentations
+• TXT: Meeting transcripts, notes
+• JSON: Structured data (see guide below)
+
+JSON Structure Guide:
+{
+    "title": "Document Title",
+    "type": "analysis_type",
+    "content": {
+        "key_findings": [...],
+        "metrics": {...},
+        "recommendations": [...]
+    }
+}""",
+                key="file_uploader"
             )
             
+            # Document type selector
             doc_type = st.selectbox(
                 "Document Type",
-                ["pitch_deck", "transcript", "competitor_analysis", 
-                 "market_research", "other"]
+                options=["pitch_deck", "competitor_analysis", "market_research", "meeting_notes"],
+                key="doc_type"
             )
-        
-        with col2:
-            st.header("File Guidelines")
-            st.info("""
-            Supported formats:
-            - PDF: Pitch decks, presentations
-            - TXT: Meeting transcripts, notes
-            - JSON: Structured data (see guide below)
-            """)
             
-            if doc_type in ["competitor_analysis", "market_research"]:
-                show_json_guide()
-        
-        if uploaded_file and st.button("Upload Document"):
-            try:
-                with st.spinner("Processing document..."):
-                    # Process the file
-                    content, metadata = doc_processor.process_file(uploaded_file)
+            if uploaded_file is not None:
+                try:
+                    # Process the uploaded file
+                    file_content = uploaded_file.read()
                     
-                    # For JSON files, validate structure if needed
-                    if metadata["format"] == "json" and doc_type in ["competitor_analysis", "market_research"]:
-                        expected_fields = DatabaseManager.get_recommended_json_structure()[doc_type].keys()
-                        if not doc_processor.validate_json_structure(content, expected_fields):
-                            st.error("JSON structure does not match the recommended format!")
-                            return
-                    
-                    # Generate unique file path
-                    file_path = f"{selected_startup['id']}/{str(uuid.uuid4())}/{uploaded_file.name}"
-                    
-                    # Upload to storage
-                    file_url = db.upload_file_to_storage(file_path, uploaded_file.getvalue())
-                    
-                    # Create document record
-                    doc = db.upload_document(
-                        startup_id=selected_startup['id'],
+                    if db.upload_document(
                         name=uploaded_file.name,
-                        content=content,
-                        file_path=file_url,
-                        doc_type=doc_type
-                    )
-                    
-                    st.success("Document uploaded and processed successfully!")
-                    
-            except Exception as e:
-                st.error(f"Error processing document: {str(e)}")
+                        content=file_content,
+                        doc_type=doc_type,
+                        startup_id=selected_startup['id']
+                    ):
+                        st.success(f"Successfully uploaded {uploaded_file.name}")
+                        st.rerun()
+                    else:
+                        st.error("Failed to upload document")
+                except Exception as e:
+                    st.error(f"Error processing file: {str(e)}")
         
         # Display existing documents
         st.header("Existing Documents")
