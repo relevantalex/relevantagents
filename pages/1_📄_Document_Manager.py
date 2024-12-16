@@ -5,6 +5,10 @@ from document_processor import DocumentProcessor
 from typing import Dict, List
 import json
 import uuid
+import fitz  # PyMuPDF
+import tempfile
+import requests
+from io import BytesIO
 
 st.set_page_config(
     page_title="Document Manager",
@@ -123,63 +127,114 @@ def main():
         st.header("Existing Documents")
         docs = db.get_documents(startup_id=selected_startup['id'])
         if docs:
+            # Custom CSS for better card styling
+            st.markdown("""
+            <style>
+            .document-card {
+                border: 1px solid #2f3640;
+                border-radius: 10px;
+                padding: 20px;
+                margin: 10px 0;
+                background-color: #1e242e;
+                position: relative;
+                min-height: 300px;
+            }
+            .card-content {
+                margin-bottom: 60px;  /* Space for the button */
+            }
+            .download-button {
+                position: absolute;
+                bottom: 20px;
+                left: 20px;
+                right: 20px;
+                background-color: #4a69bd;
+                color: white;
+                padding: 10px;
+                text-align: center;
+                border-radius: 5px;
+                text-decoration: none;
+                display: block;
+            }
+            .download-button:hover {
+                background-color: #6a89cc;
+                color: white;
+                text-decoration: none;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
             # Create a grid layout for documents
             cols = st.columns(3)  # 3 cards per row
             for idx, doc in enumerate(docs):
                 with cols[idx % 3]:
                     with st.container():
-                        # Card style
-                        st.markdown("""
-                        <style>
-                        .document-card {
-                            border: 1px solid #ddd;
-                            border-radius: 5px;
-                            padding: 10px;
-                            margin: 10px 0;
-                            background-color: white;
-                        }
-                        </style>
-                        """, unsafe_allow_html=True)
+                        st.markdown('<div class="document-card">', unsafe_allow_html=True)
+                        st.markdown('<div class="card-content">', unsafe_allow_html=True)
                         
-                        with st.container():
-                            st.markdown('<div class="document-card">', unsafe_allow_html=True)
-                            
-                            # Icon based on document type
-                            icon = "📄"
-                            if doc['type'] == 'pitch_deck':
-                                icon = "🎯"
-                            elif doc['type'] == 'competitor_analysis':
-                                icon = "📊"
-                            elif doc['type'] == 'market_research':
-                                icon = "🔍"
-                            
-                            # Document title and type
-                            st.markdown(f"### {icon} {doc['name']}")
-                            st.caption(f"Type: {doc['type']}")
-                            st.caption(f"Uploaded: {doc['created_at'][:10]}")
-                            
-                            # Preview section
-                            if doc['content']:
-                                with st.expander("Preview"):
-                                    if doc['type'] in ["competitor_analysis", "market_research"]:
-                                        try:
-                                            st.json(json.loads(doc['content']))
-                                        except:
-                                            st.text(doc['content'][:200] + "...")
-                                    else:
+                        # Icon based on document type
+                        icon = "📄"
+                        if doc['type'] == 'pitch_deck':
+                            icon = "🎯"
+                        elif doc['type'] == 'competitor_analysis':
+                            icon = "📊"
+                        elif doc['type'] == 'market_research':
+                            icon = "🔍"
+                        
+                        # Document title and type
+                        st.markdown(f"### {icon} {doc['name']}")
+                        st.caption(f"Type: {doc['type']}")
+                        st.caption(f"Uploaded: {doc['created_at'][:10]}")
+                        
+                        # Preview section
+                        if doc['file_path']:
+                            try:
+                                download_url = doc['file_path']
+                                if not download_url.startswith('http'):
+                                    download_url = db.supabase.storage.from_("documents").get_public_url(doc['file_path'])
+                                
+                                # Get PDF content
+                                response = requests.get(download_url)
+                                if response.status_code == 200 and doc['name'].lower().endswith('.pdf'):
+                                    # Create a temporary file to store the PDF
+                                    with tempfile.NamedTemporaryFile(suffix='.pdf') as temp_file:
+                                        temp_file.write(response.content)
+                                        temp_file.flush()
+                                        
+                                        # Open the PDF and render the first page
+                                        pdf_document = fitz.open(temp_file.name)
+                                        if pdf_document.page_count > 0:
+                                            page = pdf_document[0]
+                                            pix = page.get_pixmap(matrix=fitz.Matrix(0.5, 0.5))  # Scale down to 50%
+                                            img_bytes = pix.tobytes()
+                                            st.image(img_bytes, caption="Preview")
+                                        pdf_document.close()
+                            except Exception as e:
+                                st.error(f"Error loading preview: {str(e)}")
+                        
+                        # Content preview if available
+                        if doc['content']:
+                            with st.expander("Content Preview"):
+                                if doc['type'] in ["competitor_analysis", "market_research"]:
+                                    try:
+                                        st.json(json.loads(doc['content']))
+                                    except:
                                         st.text(doc['content'][:200] + "...")
-                            
-                            # Download button
-                            if doc['file_path']:
-                                try:
-                                    download_url = doc['file_path']
-                                    if not download_url.startswith('http'):
-                                        download_url = db.supabase.storage.from_("documents").get_public_url(doc['file_path'])
-                                    st.markdown(f"[📥 Download]({download_url})")
-                                except Exception as e:
-                                    st.error(f"Error with download link: {str(e)}")
-                            
-                            st.markdown('</div>', unsafe_allow_html=True)
+                                else:
+                                    st.text(doc['content'][:200] + "...")
+                        
+                        st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        # Download button at the bottom
+                        if doc['file_path']:
+                            try:
+                                download_url = doc['file_path']
+                                if not download_url.startswith('http'):
+                                    download_url = db.supabase.storage.from_("documents").get_public_url(doc['file_path'])
+                                st.markdown(f'<a href="{download_url}" class="download-button" target="_blank">📥 Download Document</a>', unsafe_allow_html=True)
+                            except Exception as e:
+                                st.error(f"Error with download link: {str(e)}")
+                        
+                        st.markdown('</div>', unsafe_allow_html=True)
         else:
             st.info("No documents uploaded yet.")
 
