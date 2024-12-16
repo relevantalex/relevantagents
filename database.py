@@ -73,11 +73,33 @@ class DatabaseManager:
     def upload_file_to_storage(self, file_path: str, file_data: bytes) -> str:
         """Upload a file to Supabase storage"""
         try:
+            # Try to create the bucket if it doesn't exist
+            try:
+                self.supabase.storage.create_bucket("documents", options={'public': True})
+                logger.info("Created 'documents' bucket")
+            except Exception as bucket_error:
+                if "already exists" not in str(bucket_error).lower():
+                    logger.error(f"Error creating bucket: {str(bucket_error)}")
+                    raise
+
+            # Check if file exists and delete it (to allow overwriting)
+            try:
+                self.supabase.storage.from_("documents").remove([file_path])
+            except:
+                pass  # File doesn't exist, which is fine
+
+            # Upload the file
             response = self.supabase.storage.from_("documents").upload(
                 file_path,
-                file_data
+                file_data,
+                {"content-type": "application/pdf"}  # Add proper content type
             )
-            return self.supabase.storage.from_("documents").get_public_url(file_path)
+            
+            # Get and verify the public URL
+            public_url = self.supabase.storage.from_("documents").get_public_url(file_path)
+            logger.info(f"File uploaded successfully. Public URL: {public_url}")
+            return public_url
+
         except Exception as e:
             logger.error(f"Error uploading file to storage: {str(e)}")
             raise
