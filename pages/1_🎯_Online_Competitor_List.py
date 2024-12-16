@@ -19,7 +19,6 @@ from io import StringIO
 from database import DatabaseManager
 import os
 import time
-import trafilatura
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import lru_cache
@@ -177,32 +176,18 @@ class DuckDuckGoSearch(SearchProvider):
 
 @lru_cache(maxsize=100)
 def scrape_website_content(url: str) -> Optional[Dict[str, str]]:
-    """Scrape website content using multiple methods for redundancy"""
-    content_methods = []
-    
+    """Enhanced website scraping with better content extraction"""
     try:
-        # Method 1: Trafilatura (good at main content extraction)
-        downloaded = trafilatura.fetch_url(url)
-        if downloaded:
-            content = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
-            if content:
-                content_methods.append({
-                    "content": content,
-                    "method": "trafilatura"
-                })
-    except Exception as e:
-        logger.error(f"Trafilatura scraping failed: {str(e)}")
-    
-    try:
-        # Method 2: BeautifulSoup
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
         response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
         soup = BeautifulSoup(response.text, 'html.parser')
         
         # Remove unwanted elements
-        for element in soup(["script", "style", "nav", "footer", "header"]):
+        for element in soup(["script", "style", "nav", "footer", "header", "aside", "noscript"]):
             element.decompose()
         
         # Get meta descriptions
@@ -223,38 +208,56 @@ def scrape_website_content(url: str) -> Optional[Dict[str, str]]:
         if title_tag:
             title = title_tag.string
         
-        # Get main content
-        main_content = soup.find("main") or soup.find("article") or soup.find("div", {"role": "main"})
+        # Try to get main content area
+        main_content = None
+        for selector in ['main', 'article', '[role="main"]', '#main-content', '.main-content', '[class*="content-main"]']:
+            main_content = soup.select_one(selector)
+            if main_content:
+                break
+        
+        if not main_content:
+            # If no main content area found, look for largest text block
+            text_blocks = []
+            for p in soup.find_all(['p', 'div']):
+                text = p.get_text(strip=True)
+                if len(text) > 50:  # Minimum length to consider
+                    text_blocks.append((len(text), p))
+            
+            if text_blocks:
+                text_blocks.sort(reverse=True)
+                main_content = text_blocks[0][1]
+        
+        # Get content
+        content = ""
         if main_content:
             content = main_content.get_text(separator=' ', strip=True)
         else:
             content = soup.get_text(separator=' ', strip=True)
         
-        content_methods.append({
+        # Clean content
+        content = re.sub(r'\s+', ' ', content)
+        content = content[:10000]  # Limit length
+        
+        # Extract company-specific information
+        about_links = soup.find_all('a', href=re.compile(r'about|company|team', re.I))
+        about_content = ""
+        if about_links:
+            about_sections = soup.find_all(['div', 'section'], 
+                                        class_=re.compile(r'about|company|team', re.I))
+            if about_sections:
+                about_content = ' '.join(s.get_text(separator=' ', strip=True) 
+                                      for s in about_sections)
+        
+        return {
             "title": title,
             "meta_description": meta_desc,
             "content": content,
-            "method": "beautifulsoup"
-        })
+            "about_content": about_content
+        }
+        
     except Exception as e:
-        logger.error(f"BeautifulSoup scraping failed: {str(e)}")
-    
-    if not content_methods:
+        logger.error(f"Failed to scrape website {url}: {str(e)}")
         return None
-    
-    # Combine results, preferring trafilatura for main content
-    combined_data = {
-        "title": next((m["title"] for m in content_methods if "title" in m), ""),
-        "meta_description": next((m["meta_description"] for m in content_methods if "meta_description" in m), ""),
-        "content": next((m["content"] for m in content_methods if m["method"] == "trafilatura"), 
-                       next((m["content"] for m in content_methods if m["method"] == "beautifulsoup"), ""))
-    }
-    
-    # Clean and normalize text
-    combined_data["content"] = re.sub(r'\s+', ' ', combined_data["content"])
-    combined_data["content"] = combined_data["content"][:10000]
-    
-    return combined_data
 
 def is_news_site(website_data: Dict[str, str]) -> bool:
     """Check if the website is a news outlet"""
