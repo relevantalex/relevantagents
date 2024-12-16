@@ -29,41 +29,28 @@ def main():
     
     # Sidebar navigation
     with st.sidebar:
-        # Empty space to push startup selection to bottom
-        st.markdown("""
-            <style>
-                section[data-testid="stSidebar"] > div {
-                    height: 100vh;
-                    display: flex;
-                    flex-direction: column;
-                }
-                .startup-section {
-                    margin-top: auto;
-                    padding: 20px 0;
-                }
-            </style>
-        """, unsafe_allow_html=True)
+        # Main navigation
+        st.markdown("<br>", unsafe_allow_html=True)
         
-        # Add empty space
-        st.empty()
-        st.empty()
-        st.empty()
-        
-        # Startup selection at the bottom
-        st.markdown('<div class="startup-section">', unsafe_allow_html=True)
-        st.subheader("Startup Selection")
-        startups = db.get_startups()
-        if startups:
-            startup_names = [s['name'] for s in startups]
-            selected_startup_name = st.selectbox("Select Startup", startup_names, label_visibility="collapsed")
-        else:
-            st.warning("No startups found. Create one first!")
-            return
-        
-        # Create new startup button below the selection
-        if st.button("Create New Startup"):
-            st.session_state.show_create_startup = True
-        st.markdown('</div>', unsafe_allow_html=True)
+        # Add a container for the rest of the sidebar space
+        with st.container():
+            # Add vertical space
+            for _ in range(10):
+                st.empty()
+            
+            # Startup selection at the bottom
+            st.subheader("Startup Selection")
+            startups = db.get_startups()
+            if startups:
+                startup_names = [s['name'] for s in startups]
+                selected_startup_name = st.selectbox("Select Startup", startup_names, label_visibility="collapsed")
+            else:
+                st.warning("No startups found. Create one first!")
+                return
+            
+            # Create new startup button below the selection
+            if st.button("Create New Startup"):
+                st.session_state.show_create_startup = True
     
     # Get selected startup data
     if startups:
