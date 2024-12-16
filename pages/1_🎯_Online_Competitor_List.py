@@ -17,6 +17,7 @@ from duckduckgo_search import DDGS
 import csv
 from io import StringIO
 from database import DatabaseManager
+import os
 
 # Initialize logging
 logging.basicConfig(
@@ -48,37 +49,27 @@ if 'current_tab' not in st.session_state:
 
 class AIProvider:
     def __init__(self):
-        self.provider = st.secrets.get("api_settings", {}).get("ai_provider", "openai")
+        self.provider = "openai"  # Default to OpenAI
         
-        if self.provider == "openai":
-            openai.api_key = st.secrets["OPENAI_API_KEY"]
-            self.model = "gpt-4-turbo-preview"
-        else:
-            self.anthropic = Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
-            self.model = "claude-3-opus-20240229"
+        # Get API keys from environment variables
+        openai.api_key = os.getenv("OPENAI_API_KEY")
+        if not openai.api_key:
+            raise ValueError("OPENAI_API_KEY environment variable is not set")
+            
+        self.model = "gpt-4-turbo-preview"
 
     def generate_response(self, prompt: str) -> str:
         try:
-            if self.provider == "openai":
-                response = openai.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": "You are a startup and industry analysis expert."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.7,
-                    max_tokens=4000
-                )
-                return response.choices[0].message.content
-            else:
-                message = self.anthropic.messages.create(
-                    model=self.model,
-                    max_tokens=4000,
-                    temperature=0.7,
-                    system="You are a startup and industry analysis expert.",
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                return message.content
+            response = openai.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are a startup and industry analysis expert."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=4000
+            )
+            return response.choices[0].message.content
 
         except Exception as e:
             logger.error(f"AI generation failed: {str(e)}")
