@@ -18,8 +18,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Initialize API clients
-client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-claude = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
+try:
+    openai_api_key = st.secrets["OPENAI_API_KEY"]
+    anthropic_api_key = st.secrets["ANTHROPIC_API_KEY"]
+    
+    client = OpenAI(api_key=openai_api_key)
+    claude = anthropic.Anthropic(api_key=anthropic_api_key)
+except Exception as e:
+    st.error("Error initializing API clients. Please check your API keys in .streamlit/secrets.toml")
+    client = None
+    claude = None
 
 @st.cache_data(show_spinner=False)
 def search_competitors(query, num_results=5):
@@ -53,44 +61,56 @@ def extract_website_info(url):
 @st.cache_data(show_spinner=False)
 def analyze_competitor_with_ai(company_name, website_content):
     """Analyze competitor using AI."""
-    try:
-        # First try with Claude
-        prompt = f"""Analyze this competitor for our market research:
-        Company: {company_name}
-        Website Content: {website_content}
-
-        Provide a structured analysis with:
-        1. Key Features/Products
-        2. Target Market
-        3. Strengths
-        4. Weaknesses
-        5. Potential Threats to Our Business
-        6. Estimated Market Position (Enterprise/Mid-Market/SMB/Startup)
-        7. Estimated Company Size
-        8. Estimated Funding Range
-
-        Format as JSON with these exact keys:
-        features, target_market, strengths, weaknesses, threats, market_position, employee_count, funding
-        """
+    if not client and not claude:
+        st.error("AI analysis is not available. Please check your API keys.")
+        return None
         
-        try:
-            response = claude.messages.create(
-                model="claude-3-opus-20240229",
-                max_tokens=1000,
-                temperature=0,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            result = json.loads(response.content[0].text)
-        except:
-            # Fallback to OpenAI
+    try:
+        # First try with Claude if available
+        if claude:
+            try:
+                prompt = f"""Analyze this competitor for our market research:
+                Company: {company_name}
+                Website Content: {website_content}
+
+                Provide a structured analysis with:
+                1. Key Features/Products
+                2. Target Market
+                3. Strengths
+                4. Weaknesses
+                5. Potential Threats to Our Business
+                6. Estimated Market Position (Enterprise/Mid-Market/SMB/Startup)
+                7. Estimated Company Size
+                8. Estimated Funding Range
+
+                Format as JSON with these exact keys:
+                features, target_market, strengths, weaknesses, threats, market_position, employee_count, funding
+                """
+                
+                response = claude.messages.create(
+                    model="claude-3-opus-20240229",
+                    max_tokens=1000,
+                    temperature=0,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                result = json.loads(response.content[0].text)
+                return result
+            except Exception as claude_error:
+                st.warning("Claude analysis failed, falling back to OpenAI...")
+        
+        # Fallback to OpenAI if Claude fails or is not available
+        if client:
             response = client.chat.completions.create(
                 model="gpt-4-turbo-preview",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0
             )
             result = json.loads(response.choices[0].message.content)
-        
-        return result
+            return result
+        else:
+            st.error("Both AI services are unavailable. Please check your API keys.")
+            return None
+            
     except Exception as e:
         st.error(f"Error analyzing with AI: {str(e)}")
         return None
