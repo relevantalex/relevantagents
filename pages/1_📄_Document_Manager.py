@@ -58,8 +58,6 @@ def main():
 
     # Main content area
     if selected_startup:
-        st.header("Upload Documents")
-        
         # File uploader with guidelines in the tooltip
         uploaded_file = st.file_uploader(
             "Choose a file",
@@ -106,6 +104,9 @@ JSON Structure Guide:
                     st.error("Failed to upload document")
             except Exception as e:
                 st.error(f"Error processing file: {str(e)}")
+        
+        # Add spacing between sections
+        st.markdown("<br><hr><br>", unsafe_allow_html=True)
         
         # Display existing documents
         st.header("Existing Documents")
