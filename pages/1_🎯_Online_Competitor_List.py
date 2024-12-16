@@ -217,18 +217,34 @@ def render_competitor_card(competitor: Dict):
         st.divider()
 
 def main():
+    # Initialize database connection
+    db = DatabaseManager()
+    
     # Initialize session state for competitors
     if 'competitors' not in st.session_state:
         st.session_state.competitors = []
+    
+    # Sidebar for startup selection
+    with st.sidebar:
+        st.subheader("Startup Selection")
+        
+        # Get all startups
+        startups = db.get_startups()
+        if startups:
+            startup_names = [s['name'] for s in startups]
+            selected_startup_name = st.selectbox("Select Startup", startup_names, label_visibility="collapsed")
+            st.session_state.selected_startup = selected_startup_name
+        else:
+            st.warning("No startups found. Create one first!")
+            return
 
-    # Get selected startup from the sidebar
+    # Get selected startup from the session state
     selected_startup_name = st.session_state.get('selected_startup')
     if not selected_startup_name:
         st.warning("Please select a startup from the sidebar first.")
         return
 
     # Get selected startup data
-    startups = db.get_startups()
     selected_startup = next(s for s in startups if s['name'] == selected_startup_name)
     
     st.title("Online Competitor List")
@@ -272,47 +288,4 @@ def main():
                 export_results(selected_startup_name)
 
 if __name__ == "__main__":
-    # Initialize database connection
-    db = DatabaseManager()
-    
-    # Add style for the banner image
-    st.markdown("""
-        <style>
-            img {
-                border-radius: 20px;
-            }
-        </style>
-        """, unsafe_allow_html=True)
-    
-    # Add banner image at the top using PIL
-    try:
-        response = requests.get("https://drive.google.com/uc?id=1Ed8JyPQzi-wkFu6KL6I7toAw4mQh064S", stream=True)
-        response.raise_for_status()
-        img = Image.open(BytesIO(response.content))
-        st.image(img, use_container_width=True)
-    except Exception as e:
-        st.error(f"Error loading banner image: {str(e)}")
-    
-    # Sidebar navigation
-    with st.sidebar:
-        # Main navigation
-        st.markdown("<br>", unsafe_allow_html=True)
-        
-        # Add a container for the rest of the sidebar space
-        with st.container():
-            # Add vertical space
-            for _ in range(10):
-                st.empty()
-            
-            # Startup selection at the bottom
-            st.subheader("Startup Selection")
-            startups = db.get_startups()
-            if startups:
-                startup_names = [s['name'] for s in startups]
-                selected_startup_name = st.selectbox("Select Startup", startup_names, label_visibility="collapsed")
-                st.session_state.selected_startup = selected_startup_name
-            else:
-                st.warning("No startups found. Create one first!")
-                return
-    
     main()
