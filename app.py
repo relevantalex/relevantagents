@@ -83,7 +83,7 @@ class AIProvider:
             logger.error(f"AI generation failed: {str(e)}")
             raise
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=False)
 def identify_industries(pitch: str) -> List[str]:
     """Identify potential industries based on the pitch using AI"""
     ai = AIProvider()

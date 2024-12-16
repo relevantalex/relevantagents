@@ -67,7 +67,6 @@ def main():
         
         selected_startup = next(s for s in startups if s['name'] == selected_startup_name)
         
-        st.divider()
         st.markdown("### Analysis Controls")
         if st.button("Generate New Analysis"):
             with st.spinner("Analyzing market niches..."):

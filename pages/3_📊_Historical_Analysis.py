@@ -68,7 +68,7 @@ def main():
         
         selected_startup = next(s for s in startups if s['name'] == selected_startup_name)
         
-        st.divider()
+        st.markdown("---")
         
         # Filters
         st.subheader("Filters")
@@ -109,7 +109,7 @@ def main():
         display_analysis_details(analysis)
     
     # Export options
-    st.divider()
+    st.markdown("---")
     col1, col2 = st.columns([1, 4])
     with col1:
         st.download_button(

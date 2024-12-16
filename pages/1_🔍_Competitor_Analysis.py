@@ -66,7 +66,7 @@ def display_competitor_card(competitor: Dict):
                 st.markdown(f"• {threat}")
         
         # Market Position and Competitive Advantage
-        st.divider()
+        st.markdown("---")
         col3, col4 = st.columns(2)
         with col3:
             st.metric("Market Position", competitor['market_position'])
@@ -112,7 +112,7 @@ def main():
         
         selected_startup = next(s for s in startups if s['name'] == selected_startup_name)
         
-        st.divider()
+        st.markdown("---")
         
         # Analysis controls
         st.subheader("Analysis Controls")
