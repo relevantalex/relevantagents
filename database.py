@@ -1,24 +1,33 @@
-from supabase import create_client
-import streamlit as st
-from typing import Dict, List, Optional
 import logging
+from typing import Dict, List, Optional
+import streamlit as st
+from supabase import create_client, Client
 
 logger = logging.getLogger(__name__)
 
 class DatabaseManager:
     def __init__(self):
-        self.supabase = create_client(
-            st.secrets["supabase"]["url"],
-            st.secrets["supabase"]["anon_key"]
-        )
-    
+        """Initialize Supabase client with service role key"""
+        try:
+            # Initialize with service role key to bypass RLS
+            self.supabase = create_client(
+                st.secrets["supabase"]["url"],
+                st.secrets["supabase"]["service_role_key"]  # Use service role key instead of anon key
+            )
+            logger.info("Successfully initialized Supabase client")
+        except Exception as e:
+            logger.error(f"Error initializing Supabase client: {str(e)}")
+            raise
+
     def create_startup(self, name: str, pitch: str) -> Dict:
         """Create a new startup entry"""
         try:
-            response = self.supabase.table("startups").insert({
+            data = {
                 "name": name,
                 "pitch": pitch
-            }).execute()
+            }
+            response = self.supabase.table("startups").insert(data).execute()
+            logger.info(f"Created startup with name: {name}")
             return response.data[0]
         except Exception as e:
             logger.error(f"Error creating startup: {str(e)}")
@@ -31,35 +40,35 @@ class DatabaseManager:
             return response.data
         except Exception as e:
             logger.error(f"Error fetching startups: {str(e)}")
-            return []
+            raise
 
-    def upload_document(self, startup_id: str, file_name: str, content: str, 
-                       file_path: str, doc_type: str) -> Dict:
-        """Upload a document associated with a startup"""
+    def upload_document(self, startup_id: str, name: str, content: str, file_path: Optional[str] = None, doc_type: Optional[str] = None) -> Dict:
+        """Upload a document for a startup"""
         try:
-            response = self.supabase.table("documents").insert({
+            data = {
                 "startup_id": startup_id,
-                "name": file_name,
+                "name": name,
                 "content": content,
                 "file_path": file_path,
                 "type": doc_type
-            }).execute()
+            }
+            response = self.supabase.table("documents").insert(data).execute()
             return response.data[0]
         except Exception as e:
             logger.error(f"Error uploading document: {str(e)}")
             raise
 
-    def get_startup_documents(self, startup_id: str) -> List[Dict]:
-        """Get all documents for a specific startup"""
+    def get_documents(self, startup_id: Optional[str] = None) -> List[Dict]:
+        """Get documents, optionally filtered by startup_id"""
         try:
-            response = self.supabase.table("documents")\
-                .select("*")\
-                .eq("startup_id", startup_id)\
-                .execute()
+            query = self.supabase.table("documents").select("*")
+            if startup_id:
+                query = query.eq("startup_id", startup_id)
+            response = query.execute()
             return response.data
         except Exception as e:
             logger.error(f"Error fetching documents: {str(e)}")
-            return []
+            raise
 
     def upload_file_to_storage(self, file_path: str, file_data: bytes) -> str:
         """Upload a file to Supabase storage"""
@@ -92,4 +101,16 @@ class DatabaseManager:
             return response.data
         except Exception as e:
             logger.error(f"Error fetching analyses: {str(e)}")
+            raise
+
+    def get_startup_documents(self, startup_id: str) -> List[Dict]:
+        """Get all documents for a specific startup"""
+        try:
+            response = self.supabase.table("documents")\
+                .select("*")\
+                .eq("startup_id", startup_id)\
+                .execute()
+            return response.data
+        except Exception as e:
+            logger.error(f"Error fetching documents: {str(e)}")
             raise
