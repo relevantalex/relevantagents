@@ -20,7 +20,7 @@ def show_json_guide():
 
 def main():
     st.set_page_config(
-        page_title="Document Manager",
+        page_title="🚀 Document Manager",
         page_icon="📄",
         layout="wide"
     )
