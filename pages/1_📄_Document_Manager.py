@@ -121,7 +121,7 @@ def main():
         
         # Display existing documents
         st.header("Existing Documents")
-        docs = db.get_startup_documents(selected_startup['id'])
+        docs = db.get_documents(startup_id=selected_startup['id'])
         if docs:
             for doc in docs:
                 with st.expander(f"📄 {doc['name']} ({doc['type']})"):
@@ -135,7 +135,14 @@ def main():
                         else:
                             st.text(doc['content'])
                     if doc['file_path']:
-                        st.link_button("Download Document", doc['file_path'])
+                        try:
+                            # Ensure the file_path is a valid URL
+                            download_url = doc['file_path']
+                            if not download_url.startswith('http'):
+                                download_url = db.supabase.storage.from_("documents").get_public_url(doc['file_path'])
+                            st.link_button("Download Document", download_url)
+                        except Exception as e:
+                            st.error(f"Error generating download link: {str(e)}")
         else:
             st.info("No documents uploaded yet.")
 
