@@ -193,32 +193,18 @@ def main():
                             unsafe_allow_html=True
                         )
                         
-                        # Content preview if available
-                        if doc['content']:
-                            with st.expander("Content Preview"):
-                                if doc['type'] in ["competitor_analysis", "market_research"]:
-                                    try:
-                                        st.json(json.loads(doc['content']))
-                                    except:
-                                        st.text(doc['content'][:200] + "...")
-                                else:
-                                    st.text(doc['content'][:200] + "...")
+                        # Download button
+                        if st.button("Download", key=f"download_{doc['id']}"):
+                            file_content = db.get_document_content(doc['id'])
+                            st.download_button(
+                                label="Save File",
+                                data=file_content,
+                                file_name=doc['name'],
+                                mime="application/octet-stream",
+                                key=f"save_{doc['id']}"
+                            )
                         
-                        st.markdown('</div>', unsafe_allow_html=True)
-                        
-                        # Download button at the bottom
-                        if doc['file_path']:
-                            try:
-                                download_url = doc['file_path']
-                                if not download_url.startswith('http'):
-                                    download_url = db.supabase.storage.from_("documents").get_public_url(doc['file_path'])
-                                st.markdown(f'<a href="{download_url}" class="download-button" target="_blank">📥 Download Document</a>', unsafe_allow_html=True)
-                            except Exception as e:
-                                st.error(f"Error with download link: {str(e)}")
-                        
-                        st.markdown('</div>', unsafe_allow_html=True)
-        else:
-            st.info("No documents uploaded yet.")
+                        st.markdown('</div></div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
