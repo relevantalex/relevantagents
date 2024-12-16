@@ -419,57 +419,85 @@ def find_competitors(industry: str, pitch: str, progress_bar) -> List[Dict]:
         logger.error(f"Competitor search failed: {str(e)}")
         raise
 
-def export_results(startup_name: str):
-    """Export analysis results to CSV"""
-    if not st.session_state.competitors:
-        st.warning("No analysis results to export yet.")
-        return
-        
-    csv_data = []
-    headers = ['Industry', 'Competitor', 'Website', 'Description', 'Key Differentiator']
-    
-    for industry, competitors in st.session_state.competitors.items():
-        for comp in competitors:
-            csv_data.append([
-                industry,
-                comp['name'],
-                comp['website'],
-                comp['description'],
-                comp['differentiator']
-            ])
-    
-    # Create CSV string
-    output = StringIO()
-    writer = csv.writer(output)
-    writer.writerow(headers)
-    writer.writerows(csv_data)
-    
-    # Create download button
-    st.download_button(
-        label="📥 Export Analysis",
-        data=output.getvalue(),
-        file_name=f"{startup_name}_competitor_analysis_{datetime.now().strftime('%Y%m%d')}.csv",
-        mime='text/csv',
-        use_container_width=True
-    )
-
-def render_competitor_card(competitor: Dict):
-    """Render a competitor analysis card using native Streamlit components"""
+def render_competitor_card(competitor: Dict[str, str]):
+    """Render a competitor card with a modern design"""
     with st.container():
-        st.subheader(competitor['name'])
-        col1, col2 = st.columns([1, 2])
+        st.markdown("""
+        <style>
+        .competitor-card {
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 10px 0;
+            background-color: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .competitor-title {
+            color: #1f1f1f;
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .competitor-link {
+            color: #0066cc;
+            text-decoration: none;
+            font-size: 0.9em;
+        }
+        .competitor-description {
+            color: #444444;
+            margin: 10px 0;
+            font-size: 0.95em;
+            line-height: 1.5;
+        }
+        .competitor-differentiator {
+            background-color: #f8f9fa;
+            border-left: 3px solid #0066cc;
+            padding: 10px;
+            margin-top: 10px;
+            font-size: 0.9em;
+            color: #666666;
+        }
+        </style>
+        """, unsafe_allow_html=True)
         
-        with col1:
-            st.markdown("**Website**")
-            st.link_button("Visit Website", competitor['website'], use_container_width=True)
+        st.markdown(f"""
+        <div class="competitor-card">
+            <div class="competitor-title">{competitor['name']}</div>
+            <a href="{competitor['website']}" target="_blank" class="competitor-link">{competitor['website']}</a>
+            <div class="competitor-description">{competitor['description']}</div>
+            <div class="competitor-differentiator">
+                <strong>Key Differentiator:</strong> {competitor['differentiator']}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+def export_results(startup_name: str):
+    """Export competitor analysis results"""
+    if st.button("📊 Export Analysis"):
+        # Create a formatted string for export
+        output = StringIO()
+        output.write(f"Competitor Analysis for {startup_name}\n")
+        output.write("=" * 50 + "\n\n")
         
-        with col2:
-            st.markdown("**Key Differentiator**")
-            st.info(competitor['differentiator'])
-        
-        st.markdown("**Description**")
-        st.text(competitor['description'])
-        st.divider()
+        for industry in st.session_state.industries:
+            output.write(f"\nIndustry: {industry}\n")
+            output.write("-" * 30 + "\n")
+            
+            if industry in st.session_state.competitors:
+                for comp in st.session_state.competitors[industry]:
+                    output.write(f"\nCompetitor: {comp['name']}\n")
+                    output.write(f"Website: {comp['website']}\n")
+                    output.write(f"Description: {comp['description']}\n")
+                    output.write(f"Key Differentiator: {comp['differentiator']}\n")
+                    output.write("\n")
+            
+        # Create download button
+        st.download_button(
+            label="💾 Download Analysis",
+            data=output.getvalue(),
+            file_name=f"competitor_analysis_{startup_name.lower().replace(' ', '_')}.txt",
+            mime="text/plain"
+        )
 
 def main():
     # Initialize database connection
@@ -543,29 +571,32 @@ def main():
                     status.update(label="✅ Phase 2: Competitor Analysis - Complete", state="complete")
                 
                 st.success("🎉 Market Analysis Successfully Completed!")
-                time.sleep(1)  # Brief pause for visual feedback
-                st.rerun()
-                
+                st.experimental_rerun()
+
         except Exception as e:
             st.error(f"Error during market analysis: {str(e)}")
 
     # Results section
     if st.session_state.industries and st.session_state.competitors:
         st.divider()
+        st.subheader("📊 Analysis Results")
         
         # Create tabs for industries
-        tab_titles = st.session_state.industries
-        tabs = st.tabs(tab_titles)
+        tabs = st.tabs(st.session_state.industries)
         
         # Handle tab content
         for i, tab in enumerate(tabs):
             with tab:
-                industry = tab_titles[i]
-                
-                # Display competitors using native components
+                industry = st.session_state.industries[i]
                 if industry in st.session_state.competitors:
-                    for competitor in st.session_state.competitors[industry]:
-                        render_competitor_card(competitor)
+                    competitors = st.session_state.competitors[industry]
+                    if competitors:
+                        for competitor in competitors:
+                            render_competitor_card(competitor)
+                    else:
+                        st.info(f"No competitors found for {industry}")
+                else:
+                    st.info(f"Analysis pending for {industry}")
         
         # Export section
         if st.session_state.competitors:
