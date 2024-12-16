@@ -114,18 +114,36 @@ def find_competitors(industry: str, pitch: str) -> List[Dict]:
         
         # Perform search
         with DDGS() as ddgs:
-            results = list(ddgs.text(search_query, max_results=10))
+            results = list(ddgs.text(search_query, max_results=15))
             
-            analysis_prompt = f"""Analyze these competitors in {industry}:
+            # First pass: Identify potential companies
+            validation_prompt = f"""Analyze these search results:
             {json.dumps(results)}
             
+            First, identify which results are actual companies with products/services (not news sites, blogs, or general websites).
+            Return a JSON array of indices of valid company results.
+            Example: [0, 2, 5, 8]"""
+            
+            valid_indices_response = ai.generate_response(validation_prompt)
+            valid_indices = json.loads(valid_indices_response.strip())
+            valid_results = [results[i] for i in valid_indices if i < len(results)]
+            
+            # Second pass: Detailed analysis of valid companies
+            analysis_prompt = f"""Analyze these validated competitors in {industry}:
+            {json.dumps(valid_results)}
+            
             Identify the top 3 most relevant direct competitors.
+            For each competitor, verify they are:
+            1. Real companies (not news sites or blogs)
+            2. Have actual products or services
+            3. Operate in the same market segment
+            
             Return a JSON array with exactly 3 companies, each containing:
             {{
                 "name": "Company Name",
                 "website": "company website",
-                "description": "2-sentence description",
-                "differentiator": "key unique selling point"
+                "description": "2-sentence description focusing on their product/service",
+                "differentiator": "key unique selling point vs your startup"
             }}
             
             Return ONLY the JSON array, no other text."""
@@ -152,8 +170,7 @@ def find_competitors(industry: str, pitch: str) -> List[Dict]:
             
     except Exception as e:
         logger.error(f"Competitor search failed: {str(e)}")
-        st.error(f"Error finding competitors: {str(e)}")
-        return []
+        raise
 
 def export_results(startup_name: str):
     """Export analysis results to CSV"""
@@ -211,9 +228,11 @@ def main():
     # Initialize database connection
     db = DatabaseManager()
     
-    # Initialize session state for competitors
+    # Initialize session state for competitors and industries
     if 'competitors' not in st.session_state:
-        st.session_state.competitors = []
+        st.session_state.competitors = {}
+    if 'industries' not in st.session_state:
+        st.session_state.industries = None
     
     # Sidebar for startup selection
     with st.sidebar:
@@ -238,34 +257,36 @@ def main():
     # Get selected startup data
     selected_startup = next(s for s in startups if s['name'] == selected_startup_name)
     
-    st.title("Online Competitor List")
+    st.title("🎯 Online Competitor List")
     st.caption("Step 1: Analyze your market and competitors")
 
     # Add analyze market button
     if st.button("🔍 Analyze Market", type="primary"):
         with st.spinner("Analyzing market..."):
             try:
-                # Get competitors using DuckDuckGo search
-                startup_industry = selected_startup.get('industry', '')
-                startup_pitch = selected_startup.get('pitch', '')
+                # First, identify industries
+                st.info("Identifying relevant industries...")
+                industries = identify_industries(selected_startup.get('pitch', ''))
+                st.session_state.industries = industries
+                st.session_state.competitors = {}
                 
-                if not startup_industry and not startup_pitch:
-                    st.error("Please add industry or pitch information in the Startup Manager first.")
-                    return
+                # Then find competitors for each industry
+                for industry in industries:
+                    with st.status(f"Finding competitors in {industry}..."):
+                        competitors = find_competitors(industry, selected_startup.get('pitch', ''))
+                        st.session_state.competitors[industry] = competitors
                 
-                competitors = find_competitors(startup_industry or startup_pitch, startup_pitch)
-                st.session_state.competitors = {startup_industry or "General": competitors}
                 st.success("Market analysis completed!")
                 st.rerun()
             except Exception as e:
                 st.error(f"Error during market analysis: {str(e)}")
 
     # Results section
-    if st.session_state.competitors:
+    if st.session_state.industries and st.session_state.competitors:
         st.divider()
         
         # Create tabs for industries
-        tab_titles = list(st.session_state.competitors.keys())
+        tab_titles = st.session_state.industries
         tabs = st.tabs(tab_titles)
         
         # Handle tab content
