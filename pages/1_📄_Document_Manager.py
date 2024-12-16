@@ -58,16 +58,13 @@ def main():
 
     # Main content area
     if selected_startup:
-        col1, col2 = st.columns([2, 1])
+        st.header("Upload Documents")
         
-        with col1:
-            st.header("Upload Documents")
-            
-            # File uploader with guidelines in the tooltip
-            uploaded_file = st.file_uploader(
-                "Choose a file",
-                type=["pdf", "txt", "json"],
-                help="""Supported formats:
+        # File uploader with guidelines in the tooltip
+        uploaded_file = st.file_uploader(
+            "Choose a file",
+            type=["pdf", "txt", "json"],
+            help="""Supported formats:
 • PDF: Pitch decks, presentations
 • TXT: Meeting transcripts, notes
 • JSON: Structured data (see guide below)
@@ -82,33 +79,33 @@ JSON Structure Guide:
         "recommendations": [...]
     }
 }""",
-                key="file_uploader"
-            )
-            
-            # Document type selector
-            doc_type = st.selectbox(
-                "Document Type",
-                options=["pitch_deck", "competitor_analysis", "market_research", "meeting_notes"],
-                key="doc_type"
-            )
-            
-            if uploaded_file is not None:
-                try:
-                    # Process the uploaded file
-                    file_content = uploaded_file.read()
-                    
-                    if db.upload_document(
-                        name=uploaded_file.name,
-                        content=file_content,
-                        doc_type=doc_type,
-                        startup_id=selected_startup['id']
-                    ):
-                        st.success(f"Successfully uploaded {uploaded_file.name}")
-                        st.rerun()
-                    else:
-                        st.error("Failed to upload document")
-                except Exception as e:
-                    st.error(f"Error processing file: {str(e)}")
+            key="file_uploader"
+        )
+        
+        # Document type selector
+        doc_type = st.selectbox(
+            "Document Type",
+            options=["pitch_deck", "competitor_analysis", "market_research", "meeting_notes"],
+            key="doc_type"
+        )
+        
+        if uploaded_file is not None:
+            try:
+                # Process the uploaded file
+                file_content = uploaded_file.read()
+                
+                if db.upload_document(
+                    name=uploaded_file.name,
+                    content=file_content,
+                    doc_type=doc_type,
+                    startup_id=selected_startup['id']
+                ):
+                    st.success(f"Successfully uploaded {uploaded_file.name}")
+                    st.rerun()
+                else:
+                    st.error("Failed to upload document")
+            except Exception as e:
+                st.error(f"Error processing file: {str(e)}")
         
         # Display existing documents
         st.header("Existing Documents")
