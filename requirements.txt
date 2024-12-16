@@ -11,4 +11,5 @@ supabase
 python-dotenv
 duckduckgo-search>=4.4
 PyPDF2>=3.0.0
-PyMuPDF==1.20.0  # For PDF previews
+Pillow  # For image handling
+pdf2image  # For PDF preview

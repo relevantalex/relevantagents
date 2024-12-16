@@ -5,7 +5,8 @@ from document_processor import DocumentProcessor
 from typing import Dict, List
 import json
 import uuid
-import fitz  # PyMuPDF
+from PIL import Image
+import PyPDF2
 import tempfile
 import requests
 from io import BytesIO
@@ -154,11 +155,21 @@ def main():
                 border-radius: 5px;
                 text-decoration: none;
                 display: block;
+                transition: background-color 0.3s ease;
             }
             .download-button:hover {
                 background-color: #6a89cc;
                 color: white;
                 text-decoration: none;
+            }
+            .document-title {
+                color: #ffffff;
+                margin-bottom: 10px;
+            }
+            .document-meta {
+                color: #8395a7;
+                font-size: 0.9em;
+                margin-bottom: 15px;
             }
             </style>
             """, unsafe_allow_html=True)
@@ -180,10 +191,12 @@ def main():
                         elif doc['type'] == 'market_research':
                             icon = "🔍"
                         
-                        # Document title and type
-                        st.markdown(f"### {icon} {doc['name']}")
-                        st.caption(f"Type: {doc['type']}")
-                        st.caption(f"Uploaded: {doc['created_at'][:10]}")
+                        # Document title and type with better styling
+                        st.markdown(f'<h3 class="document-title">{icon} {doc["name"]}</h3>', unsafe_allow_html=True)
+                        st.markdown(
+                            f'<div class="document-meta">Type: {doc["type"]}<br>Uploaded: {doc["created_at"][:10]}</div>',
+                            unsafe_allow_html=True
+                        )
                         
                         # Preview section
                         if doc['file_path']:
@@ -196,18 +209,16 @@ def main():
                                 response = requests.get(download_url)
                                 if response.status_code == 200 and doc['name'].lower().endswith('.pdf'):
                                     # Create a temporary file to store the PDF
-                                    with tempfile.NamedTemporaryFile(suffix='.pdf') as temp_file:
+                                    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
                                         temp_file.write(response.content)
                                         temp_file.flush()
                                         
-                                        # Open the PDF and render the first page
-                                        pdf_document = fitz.open(temp_file.name)
-                                        if pdf_document.page_count > 0:
-                                            page = pdf_document[0]
-                                            pix = page.get_pixmap(matrix=fitz.Matrix(0.5, 0.5))  # Scale down to 50%
-                                            img_bytes = pix.tobytes()
-                                            st.image(img_bytes, caption="Preview")
-                                        pdf_document.close()
+                                        # Extract text from first page
+                                        pdf_reader = PyPDF2.PdfReader(temp_file.name)
+                                        if len(pdf_reader.pages) > 0:
+                                            first_page = pdf_reader.pages[0]
+                                            preview_text = first_page.extract_text()[:200]
+                                            st.text_area("Preview", preview_text, height=100)
                             except Exception as e:
                                 st.error(f"Error loading preview: {str(e)}")
                         
