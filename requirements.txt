@@ -10,4 +10,5 @@ anthropic
 supabase
 python-dotenv
 duckduckgo-search>=4.4
+PyPDF2>=3.0.0
 Pillow  # For image handling
