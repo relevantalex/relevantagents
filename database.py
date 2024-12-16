@@ -72,3 +72,24 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error uploading file to storage: {str(e)}")
             raise
+
+    def save_analysis(self, analysis_data: Dict) -> Dict:
+        """Save an analysis record to the database"""
+        try:
+            response = self.supabase.table("analyses").insert(analysis_data).execute()
+            return response.data[0]
+        except Exception as e:
+            logger.error(f"Error saving analysis: {str(e)}")
+            raise
+
+    def get_analyses_for_startup(self, startup_id: str, analysis_type: Optional[str] = None) -> List[Dict]:
+        """Get all analyses for a startup"""
+        try:
+            query = self.supabase.table("analyses").select("*").eq("startup_id", startup_id)
+            if analysis_type:
+                query = query.eq("analysis_type", analysis_type)
+            response = query.order("created_at", desc=True).execute()
+            return response.data
+        except Exception as e:
+            logger.error(f"Error fetching analyses: {str(e)}")
+            raise
