@@ -194,30 +194,6 @@ def main():
                             unsafe_allow_html=True
                         )
                         
-                        # Preview section
-                        if doc['file_path']:
-                            try:
-                                download_url = doc['file_path']
-                                if not download_url.startswith('http'):
-                                    download_url = db.supabase.storage.from_("documents").get_public_url(doc['file_path'])
-                                
-                                # Get PDF content
-                                response = requests.get(download_url)
-                                if response.status_code == 200 and doc['name'].lower().endswith('.pdf'):
-                                    # Create a temporary file to store the PDF
-                                    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
-                                        temp_file.write(response.content)
-                                        temp_file.flush()
-                                        
-                                        # Extract text from first page
-                                        pdf_reader = PyPDF2.PdfReader(temp_file.name)
-                                        if len(pdf_reader.pages) > 0:
-                                            first_page = pdf_reader.pages[0]
-                                            preview_text = first_page.extract_text()[:200]
-                                            st.text_area("Preview", preview_text, height=100)
-                            except Exception as e:
-                                st.error(f"Error loading preview: {str(e)}")
-                        
                         # Content preview if available
                         if doc['content']:
                             with st.expander("Content Preview"):

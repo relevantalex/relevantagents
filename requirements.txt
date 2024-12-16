@@ -10,6 +10,4 @@ anthropic
 supabase
 python-dotenv
 duckduckgo-search>=4.4
-PyMuPDF
 Pillow  # For image handling
-pdf2image  # For PDF preview
