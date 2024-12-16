@@ -18,6 +18,7 @@ import csv
 from io import StringIO
 from database import DatabaseManager
 import os
+import time
 
 # Initialize logging
 logging.basicConfig(
@@ -75,6 +76,20 @@ class AIProvider:
             logger.error(f"AI generation failed: {str(e)}")
             raise
 
+def clean_json_response(response: str) -> str:
+    """Clean AI response to ensure valid JSON"""
+    # Find the first '[' and last ']'
+    start = response.find('[')
+    end = response.rfind(']')
+    
+    if start == -1 or end == -1:
+        raise ValueError("No valid JSON array found in response")
+        
+    json_str = response[start:end + 1]
+    # Remove any markdown formatting
+    json_str = re.sub(r'```json\s*|\s*```', '', json_str)
+    return json_str
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def identify_industries(pitch: str) -> List[str]:
     """Identify potential industries based on the pitch using AI"""
@@ -83,28 +98,25 @@ def identify_industries(pitch: str) -> List[str]:
     Identify exactly 3 specific, relevant industries or market segments.
     Format your response as a JSON array with exactly 3 strings.
     Make each industry name specific and descriptive.
-    Example: ["AI-Powered Security Analytics", "Retail Technology Solutions", "Computer Vision SaaS"]"""
+    Example: ["AI-Powered Security Analytics", "Retail Technology Solutions", "Computer Vision SaaS"]
+    
+    Return ONLY the JSON array, no other text."""
 
     try:
         response = ai.generate_response(prompt)
-        # Clean the response to ensure it's valid JSON
-        cleaned_response = response.strip()
-        if not cleaned_response.startswith('['):
-            cleaned_response = cleaned_response[cleaned_response.find('['):]
-        if not cleaned_response.endswith(']'):
-            cleaned_response = cleaned_response[:cleaned_response.rfind(']')+1]
-        
+        cleaned_response = clean_json_response(response)
         industries = json.loads(cleaned_response)
         return industries[:3]
     except Exception as e:
         logger.error(f"Industry identification failed: {str(e)}")
         return ["Technology Solutions", "Software Services", "Digital Innovation"]
 
-def find_competitors(industry: str, pitch: str) -> List[Dict]:
+def find_competitors(industry: str, pitch: str, progress_bar) -> List[Dict]:
     """Find competitors using AI and web search"""
     ai = AIProvider()
     
     try:
+        progress_bar.progress(0.1, "🔍 Generating intelligent search query...")
         # Generate search query
         search_prompt = f"""For a startup in {industry} with this pitch: "{pitch}"
         Create a search query to find direct competitors.
@@ -112,22 +124,27 @@ def find_competitors(industry: str, pitch: str) -> List[Dict]:
 
         search_query = ai.generate_response(search_prompt).strip().strip('"')
         
+        progress_bar.progress(0.3, "🌐 Scanning market landscape...")
         # Perform search
         with DDGS() as ddgs:
             results = list(ddgs.text(search_query, max_results=15))
             
+            progress_bar.progress(0.5, "🤖 Validating potential competitors...")
             # First pass: Identify potential companies
             validation_prompt = f"""Analyze these search results:
             {json.dumps(results)}
             
             First, identify which results are actual companies with products/services (not news sites, blogs, or general websites).
             Return a JSON array of indices of valid company results.
-            Example: [0, 2, 5, 8]"""
+            Example: [0, 2, 5, 8]
+            
+            Return ONLY the JSON array, no other text."""
             
             valid_indices_response = ai.generate_response(validation_prompt)
-            valid_indices = json.loads(valid_indices_response.strip())
+            valid_indices = json.loads(clean_json_response(valid_indices_response))
             valid_results = [results[i] for i in valid_indices if i < len(results)]
             
+            progress_bar.progress(0.7, "📊 Performing deep competitive analysis...")
             # Second pass: Detailed analysis of valid companies
             analysis_prompt = f"""Analyze these validated competitors in {industry}:
             {json.dumps(valid_results)}
@@ -149,14 +166,9 @@ def find_competitors(industry: str, pitch: str) -> List[Dict]:
             Return ONLY the JSON array, no other text."""
 
             competitor_analysis = ai.generate_response(analysis_prompt)
-            cleaned_analysis = competitor_analysis.strip()
-            if not cleaned_analysis.startswith('['):
-                cleaned_analysis = cleaned_analysis[cleaned_analysis.find('['):]
-            if not cleaned_analysis.endswith(']'):
-                cleaned_analysis = cleaned_analysis[:cleaned_analysis.rfind(']')+1]
+            competitors = json.loads(clean_json_response(competitor_analysis))
             
-            competitors = json.loads(cleaned_analysis)
-            
+            progress_bar.progress(0.9, "🔗 Validating company information...")
             # Clean URLs
             for comp in competitors:
                 if comp.get('website'):
@@ -166,6 +178,7 @@ def find_competitors(industry: str, pitch: str) -> List[Dict]:
                         domain = f"www.{domain}"
                     comp['website'] = f"https://{domain}"
             
+            progress_bar.progress(1.0, "✅ Analysis complete!")
             return competitors[:3]
             
     except Exception as e:
@@ -262,24 +275,45 @@ def main():
 
     # Add analyze market button
     if st.button("🔍 Analyze Market", type="primary"):
-        with st.spinner("Analyzing market..."):
-            try:
-                # First, identify industries
-                st.info("Identifying relevant industries...")
-                industries = identify_industries(selected_startup.get('pitch', ''))
-                st.session_state.industries = industries
-                st.session_state.competitors = {}
+        try:
+            # Create a container for the analysis process
+            analysis_container = st.container()
+            with analysis_container:
+                st.markdown("### 🤖 AI Market Analysis in Progress")
                 
-                # Then find competitors for each industry
-                for industry in industries:
-                    with st.status(f"Finding competitors in {industry}..."):
-                        competitors = find_competitors(industry, selected_startup.get('pitch', ''))
+                # Industry Analysis
+                with st.status("🎯 Phase 1: Industry Analysis", expanded=True) as status:
+                    st.write("Analyzing your startup's market positioning...")
+                    industries = identify_industries(selected_startup.get('pitch', ''))
+                    st.session_state.industries = industries
+                    st.session_state.competitors = {}
+                    status.update(label="✅ Phase 1: Industry Analysis - Complete", state="complete")
+                    
+                    # Show identified industries
+                    st.success("Identified Target Industries:")
+                    for idx, industry in enumerate(industries, 1):
+                        st.markdown(f"**{idx}.** {industry}")
+                
+                # Competitor Analysis
+                with st.status("🔍 Phase 2: Competitor Analysis", expanded=True) as status:
+                    # Create progress bars for each industry
+                    progress_bars = {}
+                    
+                    for industry in industries:
+                        st.write(f"\n**Analyzing {industry}**")
+                        progress_bars[industry] = st.progress(0, f"Starting analysis for {industry}...")
+                        
+                        competitors = find_competitors(industry, selected_startup.get('pitch', ''), progress_bars[industry])
                         st.session_state.competitors[industry] = competitors
+                    
+                    status.update(label="✅ Phase 2: Competitor Analysis - Complete", state="complete")
                 
-                st.success("Market analysis completed!")
+                st.success("🎉 Market Analysis Successfully Completed!")
+                time.sleep(1)  # Brief pause for visual feedback
                 st.rerun()
-            except Exception as e:
-                st.error(f"Error during market analysis: {str(e)}")
+                
+        except Exception as e:
+            st.error(f"Error during market analysis: {str(e)}")
 
     # Results section
     if st.session_state.industries and st.session_state.competitors:
