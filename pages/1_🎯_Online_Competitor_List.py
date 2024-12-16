@@ -217,6 +217,61 @@ def render_competitor_card(competitor: Dict):
         st.divider()
 
 def main():
+    # Initialize session state for competitors
+    if 'competitors' not in st.session_state:
+        st.session_state.competitors = []
+
+    # Get selected startup from the sidebar
+    selected_startup_name = st.session_state.get('selected_startup')
+    if not selected_startup_name:
+        st.warning("Please select a startup from the sidebar first.")
+        return
+
+    # Get selected startup data
+    startups = db.get_startups()
+    selected_startup = next(s for s in startups if s['name'] == selected_startup_name)
+    
+    st.title("Online Competitor List")
+    st.caption("Step 1: Analyze your market and competitors")
+
+    # Add analyze market button
+    if st.button("🔍 Analyze Market", type="primary"):
+        with st.spinner("Analyzing market..."):
+            try:
+                # Get competitors using DuckDuckGo search
+                competitors = find_competitors(selected_startup['industry'], selected_startup.get('pitch', ''))
+                st.session_state.competitors = {selected_startup['industry']: competitors}
+                st.success("Market analysis completed!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error during market analysis: {str(e)}")
+
+    # Results section
+    if st.session_state.competitors:
+        st.divider()
+        
+        # Create tabs for industries
+        tab_titles = list(st.session_state.competitors.keys())
+        tabs = st.tabs(tab_titles)
+        
+        # Handle tab content
+        for i, tab in enumerate(tabs):
+            with tab:
+                industry = tab_titles[i]
+                
+                # Display competitors using native components
+                if industry in st.session_state.competitors:
+                    for competitor in st.session_state.competitors[industry]:
+                        render_competitor_card(competitor)
+        
+        # Export section
+        if st.session_state.competitors:
+            st.divider()
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                export_results(selected_startup_name)
+
+if __name__ == "__main__":
     # Initialize database connection
     db = DatabaseManager()
     
@@ -255,78 +310,9 @@ def main():
             if startups:
                 startup_names = [s['name'] for s in startups]
                 selected_startup_name = st.selectbox("Select Startup", startup_names, label_visibility="collapsed")
-                
-                # Create new startup button below the selection
-                if st.button("Create New Startup"):
-                    st.session_state.show_create_startup = True
+                st.session_state.selected_startup = selected_startup_name
             else:
                 st.warning("No startups found. Create one first!")
                 return
     
-    # Get selected startup data
-    selected_startup = next(s for s in startups if s['name'] == selected_startup_name)
-
-    # Input section with improved layout
-    with st.container():
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            startup_name = selected_startup_name
-            st.text_input(
-                "Startup Name",
-                value=startup_name,
-                disabled=True
-            )
-        
-        with col2:
-            pitch = st.text_area(
-                "One-Sentence Pitch",
-                help="Describe what your startup does in one sentence",
-                max_chars=200,
-                placeholder="e.g., We provide AI-powered analytics for small businesses"
-            )
-    
-        analyze_button = st.button("🔍 Analyze Market", use_container_width=True, type="primary")
-    
-    # Analysis section
-    if analyze_button and startup_name and pitch:
-        with st.status("Analyzing market...", expanded=True) as status:
-            st.write("Identifying relevant industries...")
-            st.session_state.industries = identify_industries(pitch)
-            st.session_state.competitors = {}
-            status.update(label="Analysis complete!", state="complete")
-            st.rerun()
-
-    # Results section
-    if st.session_state.industries:
-        st.divider()
-        
-        # Create tabs for industries
-        tab_titles = st.session_state.industries
-        tabs = st.tabs(tab_titles)
-        
-        # Handle tab content
-        for i, tab in enumerate(tabs):
-            with tab:
-                industry = st.session_state.industries[i]
-                
-                # Load competitors if not already loaded
-                if industry not in st.session_state.competitors:
-                    with st.status(f"Analyzing competitors in {industry}...", expanded=True):
-                        competitors = find_competitors(industry, pitch)
-                        st.session_state.competitors[industry] = competitors
-                
-                # Display competitors using native components
-                if industry in st.session_state.competitors:
-                    for competitor in st.session_state.competitors[industry]:
-                        render_competitor_card(competitor)
-        
-        # Export section
-        if st.session_state.competitors:
-            st.divider()
-            col1, col2, col3 = st.columns([1, 2, 1])
-            with col2:
-                export_results(startup_name)
-
-if __name__ == "__main__":
     main()
