@@ -571,7 +571,8 @@ def main():
                     status.update(label="✅ Phase 2: Competitor Analysis - Complete", state="complete")
                 
                 st.success("🎉 Market Analysis Successfully Completed!")
-                st.experimental_rerun()
+                time.sleep(0.5)  # Brief pause for feedback
+                st.rerun()  # Using st.rerun() instead of experimental_rerun
 
         except Exception as e:
             st.error(f"Error during market analysis: {str(e)}")
