@@ -18,8 +18,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Initialize API clients
-client = OpenAI()
-claude = anthropic.Anthropic()
+client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+claude = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
 
 @st.cache_data(show_spinner=False)
 def search_competitors(query, num_results=5):
