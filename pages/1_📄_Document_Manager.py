@@ -127,44 +127,27 @@ def main():
             st.markdown("""
             <style>
             .document-card {
-                border: 1px solid #2f3640;
+                border: 1px solid rgba(250, 250, 250, 0.2);
                 border-radius: 10px;
-                padding: 20px;
-                margin: 10px 0;
-                background-color: #1e242e;
-                position: relative;
-                min-height: 300px;
+                padding: 1.5rem;
+                margin: 1rem 0;
+                background-color: rgba(49, 51, 63, 0.4);
+                transition: all 0.3s ease;
             }
-            .card-content {
-                margin-bottom: 60px;  /* Space for the button */
-            }
-            .download-button {
-                position: absolute;
-                bottom: 20px;
-                left: 20px;
-                right: 20px;
-                background-color: #4a69bd;
-                color: white;
-                padding: 10px;
-                text-align: center;
-                border-radius: 5px;
-                text-decoration: none;
-                display: block;
-                transition: background-color 0.3s ease;
-            }
-            .download-button:hover {
-                background-color: #6a89cc;
-                color: white;
-                text-decoration: none;
+            .document-card:hover {
+                border-color: rgba(250, 250, 250, 0.4);
+                background-color: rgba(49, 51, 63, 0.6);
             }
             .document-title {
+                font-size: 1.2rem;
+                font-weight: 600;
+                margin-bottom: 0.5rem;
                 color: #ffffff;
-                margin-bottom: 10px;
             }
             .document-meta {
-                color: #8395a7;
-                font-size: 0.9em;
-                margin-bottom: 15px;
+                font-size: 0.9rem;
+                color: rgba(250, 250, 250, 0.7);
+                margin-bottom: 1rem;
             }
             </style>
             """, unsafe_allow_html=True)
@@ -173,38 +156,35 @@ def main():
             cols = st.columns(3)  # 3 cards per row
             for idx, doc in enumerate(docs):
                 with cols[idx % 3]:
-                    with st.container():
-                        st.markdown('<div class="document-card">', unsafe_allow_html=True)
-                        st.markdown('<div class="card-content">', unsafe_allow_html=True)
-                        
-                        # Icon based on document type
-                        icon = "📄"
-                        if doc['type'] == 'pitch_deck':
-                            icon = "🎯"
-                        elif doc['type'] == 'competitor_analysis':
-                            icon = "📊"
-                        elif doc['type'] == 'market_research':
-                            icon = "🔍"
-                        
-                        # Document title and type with better styling
-                        st.markdown(f'<h3 class="document-title">{icon} {doc["name"]}</h3>', unsafe_allow_html=True)
-                        st.markdown(
-                            f'<div class="document-meta">Type: {doc["type"]}<br>Uploaded: {doc["created_at"][:10]}</div>',
-                            unsafe_allow_html=True
+                    # Icon based on document type
+                    icon = "📄"
+                    if doc['type'] == 'pitch_deck':
+                        icon = "🎯"
+                    elif doc['type'] == 'competitor_analysis':
+                        icon = "📊"
+                    elif doc['type'] == 'market_research':
+                        icon = "🔍"
+                    
+                    st.markdown(f"""
+                    <div class="document-card">
+                        <div class="document-title">{icon} {doc["name"]}</div>
+                        <div class="document-meta">
+                            Type: {doc["type"]}<br>
+                            Uploaded: {doc["created_at"][:10]}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Download button
+                    if st.button("Download", key=f"download_{doc['id']}"):
+                        file_content = db.get_document_content(doc['id'])
+                        st.download_button(
+                            label="Save File",
+                            data=file_content,
+                            file_name=doc['name'],
+                            mime="application/octet-stream",
+                            key=f"save_{doc['id']}"
                         )
-                        
-                        # Download button
-                        if st.button("Download", key=f"download_{doc['id']}"):
-                            file_content = db.get_document_content(doc['id'])
-                            st.download_button(
-                                label="Save File",
-                                data=file_content,
-                                file_name=doc['name'],
-                                mime="application/octet-stream",
-                                key=f"save_{doc['id']}"
-                            )
-                        
-                        st.markdown('</div></div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
