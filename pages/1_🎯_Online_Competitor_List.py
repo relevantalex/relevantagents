@@ -1,4 +1,7 @@
 import streamlit as st
+# Must set page config first
+st.set_page_config(page_title="Online Competitor List", page_icon="🎯", layout="wide")
+
 from database import DatabaseManager
 import pandas as pd
 import numpy as np
@@ -17,17 +20,19 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Initialize API clients
-try:
-    openai_api_key = st.secrets["OPENAI_API_KEY"]
-    anthropic_api_key = st.secrets["ANTHROPIC_API_KEY"]
-    
-    client = OpenAI(api_key=openai_api_key)
-    claude = anthropic.Anthropic(api_key=anthropic_api_key)
-except Exception as e:
-    st.error("Error initializing API clients. Please check your API keys in .streamlit/secrets.toml")
-    client = None
-    claude = None
+# Initialize API clients - moved inside function to ensure proper order
+def init_ai_clients():
+    try:
+        openai_api_key = st.secrets["OPENAI_API_KEY"]
+        anthropic_api_key = st.secrets["ANTHROPIC_API_KEY"]
+        
+        return OpenAI(api_key=openai_api_key), anthropic.Anthropic(api_key=anthropic_api_key)
+    except Exception as e:
+        st.error("Error initializing API clients. Please check your API keys in Streamlit settings.")
+        return None, None
+
+# Initialize clients as None first
+client, claude = None, None
 
 @st.cache_data(show_spinner=False)
 def search_competitors(query, num_results=5):
@@ -61,8 +66,14 @@ def extract_website_info(url):
 @st.cache_data(show_spinner=False)
 def analyze_competitor_with_ai(company_name, website_content):
     """Analyze competitor using AI."""
+    global client, claude
+    
+    # Initialize clients if not done yet
+    if client is None and claude is None:
+        client, claude = init_ai_clients()
+    
     if not client and not claude:
-        st.error("AI analysis is not available. Please check your API keys.")
+        st.error("AI analysis is not available. Please check your API keys in Streamlit settings.")
         return None
         
     try:
@@ -108,7 +119,7 @@ def analyze_competitor_with_ai(company_name, website_content):
             result = json.loads(response.choices[0].message.content)
             return result
         else:
-            st.error("Both AI services are unavailable. Please check your API keys.")
+            st.error("Both AI services are unavailable. Please check your API keys in Streamlit settings.")
             return None
             
     except Exception as e:
@@ -116,8 +127,6 @@ def analyze_competitor_with_ai(company_name, website_content):
         return None
 
 def main():
-    st.set_page_config(page_title="Online Competitor List", page_icon="🎯", layout="wide")
-    
     # Initialize database connection
     db = DatabaseManager()
     
