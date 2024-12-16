@@ -6,12 +6,6 @@ from typing import Dict, List
 import json
 import uuid
 
-st.set_page_config(
-    page_title="Document Manager",
-    page_icon="📄",
-    layout="wide"
-)
-
 def show_json_guide():
     st.markdown("""
     ### JSON File Structure Guide
@@ -24,38 +18,53 @@ def show_json_guide():
             st.code(json.dumps(structure, indent=2), language="json")
 
 def main():
-    st.title("Document Manager")
+    st.set_page_config(
+        page_title="Document Manager",
+        page_icon="📄",
+        layout="wide"
+    )
     
+    # Initialize database connection
     db = DatabaseManager()
-    doc_processor = DocumentProcessor()
     
-    # Startup selector or creator
+    # Sidebar navigation
     with st.sidebar:
-        st.header("Startup Selection")
+        # Add some spacing at the top
+        st.markdown("<br><br>", unsafe_allow_html=True)
         
-        # Option to create new startup
-        with st.expander("Create New Startup"):
-            new_startup_name = st.text_input("Startup Name")
-            new_startup_pitch = st.text_area("Pitch")
-            if st.button("Create Startup"):
-                if new_startup_name and new_startup_pitch:
-                    startup = db.create_startup(new_startup_name, new_startup_pitch)
-                    st.success(f"Created startup: {new_startup_name}")
-                    st.rerun()
+        # Move startup selection to the bottom with spacing
+        st.markdown("""<style>
+            .startup-section {
+                position: fixed;
+                bottom: 40px;
+                padding: 20px 0;
+                width: 250px;  /* Adjust based on your sidebar width */
+                background: transparent;
+            }
+        </style>""", unsafe_allow_html=True)
         
-        # Startup selector
+        st.markdown('<div class="startup-section">', unsafe_allow_html=True)
+        # Startup selection
+        st.subheader("Startup Selection")
         startups = db.get_startups()
         if startups:
-            startup_names = [s["name"] for s in startups]
-            selected_startup_name = st.selectbox(
-                "Select Startup",
-                startup_names
-            )
-            selected_startup = next(s for s in startups if s["name"] == selected_startup_name)
+            startup_names = [s['name'] for s in startups]
+            selected_startup_name = st.selectbox("Select Startup", startup_names)
         else:
             st.warning("No startups found. Create one first!")
             return
-
+        
+        # Create new startup button below the selection
+        if st.button("Create New Startup"):
+            st.session_state.show_create_startup = True
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Get selected startup data
+    if startups:
+        selected_startup = next(s for s in startups if s['name'] == selected_startup_name)
+    else:
+        return
+    
     # Main content area
     if selected_startup:
         # File uploader with guidelines in the tooltip

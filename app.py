@@ -216,7 +216,7 @@ def render_competitor_card(competitor: Dict):
         st.divider()
 
 def main():
-     # Add style for the banner image
+    # Add style for the banner image
     st.markdown("""
         <style>
             img {
@@ -234,6 +234,34 @@ def main():
     except Exception as e:
         st.error(f"Error loading banner image: {str(e)}")
     
+    # Sidebar navigation
+    with st.sidebar:
+        # Add some spacing at the top
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        
+        # Move startup selection to the bottom with spacing
+        st.markdown("""<style>
+            .startup-section {
+                position: fixed;
+                bottom: 40px;
+                padding: 20px 0;
+                width: 250px;  /* Adjust based on your sidebar width */
+                background: transparent;
+            }
+        </style>""", unsafe_allow_html=True)
+        
+        st.markdown('<div class="startup-section">', unsafe_allow_html=True)
+        # Startup selection
+        st.subheader("Startup Selection")
+        startups = [] # db.get_startups()
+        startup_names = [s['name'] for s in startups]
+        selected_startup_name = st.selectbox("Select Startup", startup_names)
+        
+        # Create new startup button below the selection
+        if st.button("Create New Startup"):
+            st.session_state.show_create_startup = True
+        st.markdown('</div>', unsafe_allow_html=True)
+
     # Input section with improved layout
     with st.container():
         col1, col2 = st.columns(2)
