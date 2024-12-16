@@ -140,7 +140,7 @@ def main():
                             download_url = doc['file_path']
                             if not download_url.startswith('http'):
                                 download_url = db.supabase.storage.from_("documents").get_public_url(doc['file_path'])
-                            st.link_button("Download Document", download_url)
+                            st.markdown(f"[Download Document]({download_url})")
                         except Exception as e:
                             st.error(f"Error generating download link: {str(e)}")
         else:
