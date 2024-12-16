@@ -149,6 +149,15 @@ def main():
                 color: rgba(250, 250, 250, 0.7);
                 margin-bottom: 1rem;
             }
+            .delete-button {
+                color: #ff6b6b;
+                cursor: pointer;
+                float: right;
+                transition: color 0.3s ease;
+            }
+            .delete-button:hover {
+                color: #ff4757;
+            }
             </style>
             """, unsafe_allow_html=True)
             
@@ -167,7 +176,9 @@ def main():
                     
                     st.markdown(f"""
                     <div class="document-card">
-                        <div class="document-title">{icon} {doc["name"]}</div>
+                        <div class="document-title">
+                            {icon} {doc["name"]}
+                        </div>
                         <div class="document-meta">
                             Type: {doc["type"]}<br>
                             Uploaded: {doc["created_at"][:10]}
@@ -175,16 +186,13 @@ def main():
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # Download button
-                    if st.button("Download", key=f"download_{doc['id']}"):
-                        file_content = db.get_document_content(doc['id'])
-                        st.download_button(
-                            label="Save File",
-                            data=file_content,
-                            file_name=doc['name'],
-                            mime="application/octet-stream",
-                            key=f"save_{doc['id']}"
-                        )
+                    # Delete button
+                    if st.button("🗑️ Delete", key=f"delete_{doc['id']}", type="secondary"):
+                        if db.delete_document(doc['id']):
+                            st.success(f"Deleted {doc['name']}")
+                            st.rerun()
+                        else:
+                            st.error("Failed to delete document")
 
 if __name__ == "__main__":
     main()

@@ -137,6 +137,15 @@ class DatabaseManager:
             logger.error(f"Error fetching documents: {str(e)}")
             raise
 
+    def delete_document(self, document_id: int) -> bool:
+        """Delete a document from the database."""
+        try:
+            response = self.supabase.table('documents').delete().eq('id', document_id).execute()
+            return True
+        except Exception as e:
+            print(f"Error deleting document: {e}")
+            return False
+
     @staticmethod
     def get_recommended_json_structure():
         """Get recommended JSON structure for different document types."""
