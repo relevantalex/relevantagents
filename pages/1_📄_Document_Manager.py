@@ -108,7 +108,7 @@ def main():
                     # Create document record
                     doc = db.upload_document(
                         startup_id=selected_startup['id'],
-                        file_name=uploaded_file.name,
+                        name=uploaded_file.name,
                         content=content,
                         file_path=file_url,
                         doc_type=doc_type
