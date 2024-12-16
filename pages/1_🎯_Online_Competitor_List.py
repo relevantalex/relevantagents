@@ -19,6 +19,10 @@ from io import StringIO
 from database import DatabaseManager
 import os
 import time
+import trafilatura
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from functools import lru_cache
 
 # Initialize logging
 logging.basicConfig(
@@ -111,45 +115,146 @@ def identify_industries(pitch: str) -> List[str]:
         logger.error(f"Industry identification failed: {str(e)}")
         return ["Technology Solutions", "Software Services", "Digital Innovation"]
 
-def scrape_website_content(url: str) -> Dict[str, str]:
-    """Scrape website content and extract relevant information"""
+@dataclass
+class CompetitorData:
+    domain: str
+    name: str
+    website: str
+    description: str
+    differentiator: str
+    relevance_score: float
+    confidence_score: float
+
+class SearchProvider:
+    def search(self, query: str, max_results: int) -> List[Dict[str, str]]:
+        raise NotImplementedError
+
+class BraveSearch(SearchProvider):
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.base_url = "https://api.search.brave.com/res/v1/web/search"
+        
+    def search(self, query: str, max_results: int) -> List[Dict[str, str]]:
+        headers = {"X-Subscription-Token": self.api_key}
+        params = {
+            "q": query,
+            "count": max_results,
+            "search_lang": "en"
+        }
+        
+        try:
+            response = requests.get(self.base_url, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            results = []
+            for web in data.get("web", {}).get("results", []):
+                results.append({
+                    "title": web.get("title", ""),
+                    "link": web.get("url", ""),
+                    "description": web.get("description", "")
+                })
+            return results
+        except Exception as e:
+            logger.error(f"Brave search failed: {str(e)}")
+            return []
+
+class DuckDuckGoSearch(SearchProvider):
+    def search(self, query: str, max_results: int) -> List[Dict[str, str]]:
+        try:
+            with DDGS() as ddgs:
+                results = []
+                for r in ddgs.text(query, max_results=max_results):
+                    results.append({
+                        "title": r.get("title", ""),
+                        "link": r.get("link", ""),
+                        "description": r.get("body", "")
+                    })
+                return results
+        except Exception as e:
+            logger.error(f"DuckDuckGo search failed: {str(e)}")
+            return []
+
+@lru_cache(maxsize=100)
+def scrape_website_content(url: str) -> Optional[Dict[str, str]]:
+    """Scrape website content using multiple methods for redundancy"""
+    content_methods = []
+    
     try:
+        # Method 1: Trafilatura (good at main content extraction)
+        downloaded = trafilatura.fetch_url(url)
+        if downloaded:
+            content = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
+            if content:
+                content_methods.append({
+                    "content": content,
+                    "method": "trafilatura"
+                })
+    except Exception as e:
+        logger.error(f"Trafilatura scraping failed: {str(e)}")
+    
+    try:
+        # Method 2: BeautifulSoup
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
         response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Remove script and style elements
-        for script in soup(["script", "style"]):
-            script.decompose()
-            
-        # Extract text content
-        text = soup.get_text(separator=' ', strip=True)
+        # Remove unwanted elements
+        for element in soup(["script", "style", "nav", "footer", "header"]):
+            element.decompose()
         
         # Get meta descriptions
         meta_desc = ""
-        meta_tag = soup.find("meta", attrs={"name": "description"}) or soup.find("meta", attrs={"property": "og:description"})
-        if meta_tag:
-            meta_desc = meta_tag.get("content", "")
-            
+        meta_tags = [
+            soup.find("meta", attrs={"name": "description"}),
+            soup.find("meta", attrs={"property": "og:description"}),
+            soup.find("meta", attrs={"name": "twitter:description"})
+        ]
+        for tag in meta_tags:
+            if tag and tag.get("content"):
+                meta_desc = tag.get("content")
+                break
+        
         # Get title
-        title = soup.title.string if soup.title else ""
+        title = ""
+        title_tag = soup.find("title")
+        if title_tag:
+            title = title_tag.string
         
-        # Clean and normalize text
-        text = re.sub(r'\s+', ' ', text)
-        text = text[:10000]  # Limit text length
+        # Get main content
+        main_content = soup.find("main") or soup.find("article") or soup.find("div", {"role": "main"})
+        if main_content:
+            content = main_content.get_text(separator=' ', strip=True)
+        else:
+            content = soup.get_text(separator=' ', strip=True)
         
-        return {
+        content_methods.append({
             "title": title,
             "meta_description": meta_desc,
-            "content": text
-        }
+            "content": content,
+            "method": "beautifulsoup"
+        })
     except Exception as e:
-        logger.error(f"Failed to scrape website {url}: {str(e)}")
+        logger.error(f"BeautifulSoup scraping failed: {str(e)}")
+    
+    if not content_methods:
         return None
+    
+    # Combine results, preferring trafilatura for main content
+    combined_data = {
+        "title": next((m["title"] for m in content_methods if "title" in m), ""),
+        "meta_description": next((m["meta_description"] for m in content_methods if "meta_description" in m), ""),
+        "content": next((m["content"] for m in content_methods if m["method"] == "trafilatura"), 
+                       next((m["content"] for m in content_methods if m["method"] == "beautifulsoup"), ""))
+    }
+    
+    # Clean and normalize text
+    combined_data["content"] = re.sub(r'\s+', ' ', combined_data["content"])
+    combined_data["content"] = combined_data["content"][:10000]
+    
+    return combined_data
 
 def is_news_site(website_data: Dict[str, str]) -> bool:
     """Check if the website is a news outlet"""
@@ -174,8 +279,8 @@ def is_news_site(website_data: Dict[str, str]) -> bool:
         
     return False
 
-def validate_competitor(website_data: Dict[str, str], industry: str, startup_pitch: str) -> Tuple[bool, str, str]:
-    """Validate if a website belongs to a legitimate competitor in the specified industry"""
+def validate_competitor(website_data: Dict[str, str], industry: str, startup_pitch: str) -> Tuple[bool, str, str, float]:
+    """Validate competitor with multiple checks and scoring"""
     ai = AIProvider()
     
     validation_prompt = f"""Analyze this potential competitor:
@@ -186,12 +291,14 @@ def validate_competitor(website_data: Dict[str, str], industry: str, startup_pit
     Target Industry: {industry}
     Our Startup's Pitch: {startup_pitch}
     
-    Perform the following checks and return a JSON object with these fields:
-    1. is_company: Is this a real company (not a news site, blog, or general website)?
-    2. is_competitor: Does it compete in our target industry?
-    3. company_description: Write a detailed 2-sentence description of their core product/service
+    Perform a detailed analysis and return a JSON object with:
+    1. is_company: Is this a real company (not news/blog/etc)?
+    2. is_competitor: Do they compete in our industry?
+    3. company_description: Detailed 2-sentence description of their product/service
     4. differentiator: Their key advantage or unique selling point
-    5. relevance_score: Rate from 0-100 how relevant they are as a competitor
+    5. relevance_score: 0-100 rating as competitor
+    6. confidence_score: 0-100 rating of analysis confidence
+    7. reasoning: Brief explanation of the scoring
     
     Return ONLY the JSON object, no other text."""
     
@@ -199,48 +306,61 @@ def validate_competitor(website_data: Dict[str, str], industry: str, startup_pit
         response = ai.generate_response(validation_prompt)
         validation = json.loads(clean_json_response(response))
         
-        is_valid = validation['is_company'] and validation['is_competitor'] and validation['relevance_score'] >= 70
-        return (is_valid, validation['company_description'], validation['differentiator'])
+        is_valid = (
+            validation['is_company'] and 
+            validation['is_competitor'] and 
+            validation['relevance_score'] >= 70 and 
+            validation['confidence_score'] >= 60
+        )
+        
+        return (
+            is_valid,
+            validation['company_description'],
+            validation['differentiator'],
+            validation['relevance_score']
+        )
     except Exception as e:
         logger.error(f"Competitor validation failed: {str(e)}")
-        return (False, "", "")
+        return (False, "", "", 0)
 
 def find_competitors(industry: str, pitch: str, progress_bar) -> List[Dict]:
-    """Find competitors using AI and web search"""
+    """Find competitors using multiple search providers and validation methods"""
     ai = AIProvider()
-    all_competitors = set()  # Track all competitors to avoid duplicates
+    all_competitors: Set[str] = set()
+    potential_competitors: List[CompetitorData] = []
+    
+    # Initialize search providers
+    search_providers = [
+        BraveSearch(api_key="BSAFYF-wl3SieZb-w4E18vNNwXldlnH"),
+        DuckDuckGoSearch()
+    ]
     
     try:
-        progress_bar.progress(0.1, "🔍 Generating intelligent search query...")
+        progress_bar.progress(0.1, "🔍 Generating search queries...")
         search_prompt = f"""For a startup in {industry} with this pitch: "{pitch}"
-        Create 3 different search queries to find direct competitors.
-        Return a JSON array of 3 queries.
-        Make them specific and targeted to find actual companies, not news or general results.
+        Create 4 different search queries to find direct competitors.
+        Make them specific and targeted to find actual companies.
+        Include company-specific terms like "company", "platform", "solution", "software".
+        Return a JSON array of queries.
         Return ONLY the JSON array, no other text."""
 
         queries = json.loads(clean_json_response(ai.generate_response(search_prompt)))
         
-        valid_competitors = []
-        for query_idx, search_query in enumerate(queries):
-            progress_bar.progress(0.2 + 0.2 * query_idx, f"🌐 Scanning market with query {query_idx + 1}/3...")
-            
-            # Perform search
-            with DDGS() as ddgs:
-                results = list(ddgs.text(search_query, max_results=10))
+        total_steps = len(search_providers) * len(queries)
+        current_step = 0
+        
+        for provider in search_providers:
+            for query in queries:
+                current_step += 1
+                progress = 0.2 + (0.6 * current_step / total_steps)
+                progress_bar.progress(progress, f"🌐 Searching with provider {type(provider).__name__} ({current_step}/{total_steps})")
                 
-                # Process each result
-                for result_idx, result in enumerate(results):
-                    progress_value = 0.3 + 0.5 * (query_idx * len(results) + result_idx) / (len(queries) * len(results))
-                    progress_bar.progress(progress_value, f"🔍 Analyzing potential competitor {result_idx + 1}/10...")
-                    
-                    # Extract domain from result
+                results = provider.search(query, max_results=5)
+                
+                for result in results:
                     try:
                         domain = urlparse(result['link']).netloc
-                        if not domain:
-                            continue
-                            
-                        # Skip if we've already processed this domain
-                        if domain in all_competitors:
+                        if not domain or domain in all_competitors:
                             continue
                             
                         all_competitors.add(domain)
@@ -250,33 +370,48 @@ def find_competitors(industry: str, pitch: str, progress_bar) -> List[Dict]:
                         if not website_data:
                             continue
                             
-                        # Check if it's a news site
+                        # Skip news sites
                         if is_news_site(website_data):
                             continue
                             
                         # Validate competitor
-                        is_valid, description, differentiator = validate_competitor(website_data, industry, pitch)
+                        is_valid, description, differentiator, relevance = validate_competitor(
+                            website_data, industry, pitch
+                        )
+                        
                         if is_valid:
-                            valid_competitors.append({
-                                "name": website_data['title'].split('|')[0].strip(),
-                                "website": result['link'],
-                                "description": description,
-                                "differentiator": differentiator
-                            })
-                            
-                        if len(valid_competitors) >= 3:
-                            break
+                            competitor = CompetitorData(
+                                domain=domain,
+                                name=website_data['title'].split('|')[0].strip(),
+                                website=result['link'],
+                                description=description,
+                                differentiator=differentiator,
+                                relevance_score=relevance,
+                                confidence_score=1.0  # Base confidence
+                            )
+                            potential_competitors.append(competitor)
                             
                     except Exception as e:
                         logger.error(f"Error processing result: {str(e)}")
                         continue
-                        
-                if len(valid_competitors) >= 3:
-                    break
-            
+        
+        # Sort by relevance and convert to final format
+        progress_bar.progress(0.9, "🏆 Selecting top competitors...")
+        potential_competitors.sort(key=lambda x: x.relevance_score, reverse=True)
+        
+        final_competitors = [
+            {
+                "name": comp.name,
+                "website": comp.website,
+                "description": comp.description,
+                "differentiator": comp.differentiator
+            }
+            for comp in potential_competitors[:3]
+        ]
+        
         progress_bar.progress(1.0, "✅ Analysis complete!")
-        return valid_competitors[:3]
-            
+        return final_competitors
+        
     except Exception as e:
         logger.error(f"Competitor search failed: {str(e)}")
         raise
