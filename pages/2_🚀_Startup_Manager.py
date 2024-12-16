@@ -60,7 +60,7 @@ def main():
         return
     
     # Main content area
-    st.title("🚀💼 Startup Manager")
+    st.title("🚀 Startup Manager")
     st.caption("Step 2: Manage your startup information and documents")
     
     # Startup Information Section
