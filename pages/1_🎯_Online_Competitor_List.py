@@ -52,7 +52,7 @@ class AIProvider:
         self.provider = "openai"  # Default to OpenAI
         
         # Try environment variable first, then fall back to Streamlit secrets
-        openai.api_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY")
+        openai.api_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("api_keys", {}).get("openai_api_key")
         if not openai.api_key:
             raise ValueError("OpenAI API key not found in environment variables or Streamlit secrets")
             
