@@ -13,23 +13,99 @@ import time
 from anthropic import Anthropic
 import openai
 import os
+from duckduckgo_search import DDGS
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class VCData:
+class VCResearchEngine:
     def __init__(self):
-        self.name: str = ""
-        self.website: str = ""
-        self.email: str = ""
-        self.summary: str = ""
-        self.match_reason: str = ""
-        self.partner_linkedin: str = ""
-        self.analyst_linkedin: str = ""
-        self.portfolio_companies: List[str] = []
-        self.investment_verticals: List[str] = []
-        self.match_score: float = 0.0
+        self.session = requests.Session()
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        self.ddgs = DDGS()
+
+    def search_vcs(self, startup_info: Dict[str, any]) -> List[Dict[str, any]]:
+        """Search for relevant VCs based on startup information"""
+        industry = startup_info.get('industry', '')
+        stage = startup_info.get('stage', '')
+        location = startup_info.get('location', '')
+        
+        search_queries = [
+            f"venture capital firms investing in {industry} startups",
+            f"VC funds {stage} stage {industry}",
+            f"top venture capital firms {location} {industry}",
+            f"early stage investors {industry} technology",
+        ]
+        
+        results = []
+        for query in search_queries:
+            try:
+                ddg_results = self.ddgs.text(query, max_results=5)
+                for result in ddg_results:
+                    if 'venture' in result['title'].lower() or 'capital' in result['title'].lower():
+                        results.append({
+                            'name': result['title'],
+                            'website': result['link'],
+                            'description': result['body']
+                        })
+            except Exception as e:
+                logger.error(f"Error in DuckDuckGo search: {str(e)}")
+                
+        return self.deduplicate_results(results)
+    
+    def deduplicate_results(self, results: List[Dict[str, any]]) -> List[Dict[str, any]]:
+        """Remove duplicate VCs based on website domain"""
+        seen_domains = set()
+        unique_results = []
+        
+        for result in results:
+            domain = urlparse(result['website']).netloc
+            if domain not in seen_domains:
+                seen_domains.add(domain)
+                unique_results.append(result)
+        
+        return unique_results
+
+    def enrich_vc_data(self, vc_data: Dict[str, any]) -> Dict[str, any]:
+        """Enrich VC data with additional information from various sources"""
+        website = vc_data.get('website', '')
+        name = vc_data.get('name', '')
+        
+        # Search for additional information
+        search_queries = [
+            f"{name} venture capital portfolio companies",
+            f"{name} VC investment thesis",
+            f"{name} VC team members linkedin",
+            f"{name} recent investments news"
+        ]
+        
+        additional_info = {
+            'portfolio_companies': [],
+            'investment_thesis': '',
+            'team_members': [],
+            'recent_investments': []
+        }
+        
+        for query in search_queries:
+            try:
+                results = self.ddgs.text(query, max_results=3)
+                for result in results:
+                    if name.lower() in result['title'].lower():
+                        if 'portfolio' in query:
+                            additional_info['portfolio_companies'].append(result['body'])
+                        elif 'thesis' in query:
+                            additional_info['investment_thesis'] += result['body']
+                        elif 'team' in query:
+                            additional_info['team_members'].append(result['title'])
+                        elif 'investments' in query:
+                            additional_info['recent_investments'].append(result['body'])
+            except Exception as e:
+                logger.error(f"Error enriching VC data: {str(e)}")
+        
+        return {**vc_data, **additional_info}
 
 class VCScraper:
     def __init__(self):
@@ -251,69 +327,127 @@ class VCAnalyzer:
                 'match_reason': f"Error analyzing VC fit: {str(e)}"
             }
 
-def process_vc_list(uploaded_file, startup_pitch: str) -> pd.DataFrame:
-    if not startup_pitch.strip():
-        st.error("Please enter your startup pitch first!")
-        return pd.DataFrame()
-
-    try:
-        df = pd.read_csv(uploaded_file)
-        required_columns = ['name', 'website']
-        if not all(col in df.columns for col in required_columns):
-            st.error("CSV file must contain 'name' and 'website' columns!")
-            return pd.DataFrame()
-    except Exception as e:
-        st.error(f"Error reading CSV file: {str(e)}")
-        return pd.DataFrame()
-
-    # Process only first 20 VCs
-    df = df.head(20)
-    total_vcs = len(df)
+def load_startup_data() -> Dict[str, any]:
+    """Load startup data from the database"""
+    db = DatabaseManager()
+    startup_data = db.get_startup_info()
     
-    results = []
+    if not startup_data:
+        st.error("No startup data found. Please set up your startup information in the Startup Manager first.")
+        return None
+        
+    return startup_data
+
+def process_vc_list(uploaded_file, startup_data: Dict[str, any]) -> pd.DataFrame:
+    """Process list of VCs from uploaded file"""
     vc_scraper = VCScraper()
     vc_analyzer = VCAnalyzer()
+    vc_researcher = VCResearchEngine()
+    results = []
     
-    # Create placeholder for results table
-    results_placeholder = st.empty()
-    
-    # Create columns for progress information
-    col1, col2 = st.columns([3, 1])
-    with col1:
+    # Process uploaded VCs
+    if uploaded_file:
+        df = pd.read_csv(uploaded_file)
+        df = df.head(20)  # Process first 20 VCs
+        
         progress_bar = st.progress(0)
-    with col2:
-        counter = st.empty()
+        status_text = st.empty()
+        
+        for idx, row in df.iterrows():
+            try:
+                progress = (idx + 1) / len(df)
+                progress_bar.progress(progress)
+                
+                name = row['name']
+                website = str(row['website']).strip()
+                
+                status_text.write(f"🔍 Analyzing {name}...")
+                
+                if not website or website.lower() == 'nan':
+                    continue
+                
+                # Basic website scraping
+                website_data = vc_scraper.scrape_website(website)
+                
+                # Enrich with additional data
+                enriched_data = vc_researcher.enrich_vc_data({
+                    'name': name,
+                    'website': website,
+                    **website_data
+                })
+                
+                # Analyze VC fit
+                analysis = vc_analyzer.analyze_vc_fit(enriched_data, startup_data)
+                
+                if analysis['match_score'] >= 50:  # Include more VCs in results
+                    results.append({
+                        'Source': 'Uploaded List',
+                        'VC Firm Name': name,
+                        'Contact Email': ', '.join(website_data['emails']) if website_data['emails'] else 'No email found',
+                        'Why This Fund is a Match': analysis['match_reason'],
+                        'Partner LinkedIn': website_data.get('partner', 'Not found'),
+                        'Analyst LinkedIn': website_data.get('analyst', 'Not found'),
+                        'Investment Verticals': ', '.join(analysis.get('verticals', [])),
+                        'Investment Stages': ', '.join(analysis.get('stages', [])),
+                        'Typical Check Size': analysis.get('check_size', 'Unknown'),
+                        'Geographic Focus': analysis.get('geography', 'Unknown'),
+                        'Similar Portfolio Companies': ', '.join(analysis.get('similar_companies', [])),
+                        'Match Score': analysis.get('match_score', 0)
+                    })
+                
+                # Update results in real-time
+                temp_df = pd.DataFrame(results)
+                st.dataframe(temp_df)
+                
+            except Exception as e:
+                logger.error(f"Error processing {name}: {str(e)}")
+                continue
+        
+        progress_bar.empty()
+        status_text.empty()
     
+    return pd.DataFrame(results)
+
+def find_additional_vcs(startup_data: Dict[str, any]) -> pd.DataFrame:
+    """Find additional relevant VCs through internet research"""
+    vc_researcher = VCResearchEngine()
+    vc_scraper = VCScraper()
+    vc_analyzer = VCAnalyzer()
+    results = []
+    
+    st.write("🔎 Searching for additional relevant VCs...")
+    
+    # Search for relevant VCs
+    discovered_vcs = vc_researcher.search_vcs(startup_data)
+    
+    progress_bar = st.progress(0)
     status_text = st.empty()
     
-    for idx, row in df.iterrows():
+    for idx, vc in enumerate(discovered_vcs):
         try:
-            progress = (idx + 1) / total_vcs
+            progress = (idx + 1) / len(discovered_vcs)
             progress_bar.progress(progress)
-            counter.write(f"{idx + 1}/{total_vcs}")
             
-            name = row['name']
-            website = str(row['website']).strip()
+            status_text.write(f"🔍 Analyzing discovered VC: {vc['name']}...")
             
-            status_text.write(f"🔍 Analyzing: {name}")
-            
-            if not website or website.lower() == 'nan':
-                continue
-                
             # Scrape website
-            website_data = vc_scraper.scrape_website(website)
+            website_data = vc_scraper.scrape_website(vc['website'])
             
-            if website_data['text']:
-                # Analyze VC fit
-                analysis = vc_analyzer.analyze_vc_fit({
-                    'text': website_data['text'],
-                    'portfolio': website_data.get('portfolio', '')
-                }, startup_pitch)
-                
-                result = {
-                    'VC Firm Name': name,
+            # Enrich with additional data
+            enriched_data = vc_researcher.enrich_vc_data({
+                **vc,
+                **website_data
+            })
+            
+            # Analyze VC fit
+            analysis = vc_analyzer.analyze_vc_fit(enriched_data, startup_data)
+            
+            if analysis['match_score'] >= 60:  # Higher threshold for discovered VCs
+                results.append({
+                    'Source': 'Discovered',
+                    'VC Firm Name': vc['name'],
                     'Contact Email': ', '.join(website_data['emails']) if website_data['emails'] else 'No email found',
-                    'Why This Fund is a Match': analysis.get('match_reason', '') if analysis.get('match_score', 0) >= 70 else 'Not a strong match',
+                    'Why This Fund is a Match': analysis['match_reason'],
                     'Partner LinkedIn': website_data.get('partner', 'Not found'),
                     'Analyst LinkedIn': website_data.get('analyst', 'Not found'),
                     'Investment Verticals': ', '.join(analysis.get('verticals', [])),
@@ -322,87 +456,79 @@ def process_vc_list(uploaded_file, startup_pitch: str) -> pd.DataFrame:
                     'Geographic Focus': analysis.get('geography', 'Unknown'),
                     'Similar Portfolio Companies': ', '.join(analysis.get('similar_companies', [])),
                     'Match Score': analysis.get('match_score', 0)
-                }
+                })
                 
-                results.append(result)
-                
-                # Update results table
+                # Update results in real-time
                 temp_df = pd.DataFrame(results)
-                results_placeholder.dataframe(temp_df)
+                st.dataframe(temp_df)
                 
         except Exception as e:
-            logger.error(f"Error processing {name}: {str(e)}")
+            logger.error(f"Error processing discovered VC {vc['name']}: {str(e)}")
             continue
     
-    # Clear progress indicators
     progress_bar.empty()
-    counter.empty()
     status_text.empty()
     
-    final_df = pd.DataFrame(results)
-    
-    if final_df.empty:
-        st.warning("No results found. Try adjusting your startup pitch or check the VC list.")
-    else:
-        st.success(f"✅ Analysis complete! Found {len(final_df)} matching VCs.")
-    
-    return final_df
+    return pd.DataFrame(results)
 
 def main():
     st.title("🎯 VC Analysis")
     
-    with st.expander("ℹ️ How to use", expanded=False):
-        st.markdown("""
-        1. Enter your startup pitch, including:
-           - Your value proposition
-           - Target market
-           - Current traction
-           - Funding stage
-        2. Upload a CSV file with VC information (columns: name, website)
-        3. Click 'Start VC Analysis' to begin
-        
-        The analysis will:
-        - Scrape VC websites for contact information
-        - Analyze investment focus
-        - Evaluate startup-VC fit
-        - Find team member profiles
-        """)
+    # Load startup data from database
+    startup_data = load_startup_data()
+    if not startup_data:
+        st.stop()
     
-    if 'startup_pitch' not in st.session_state:
-        st.session_state.startup_pitch = ""
+    # Display startup information
+    with st.expander("📋 Startup Information", expanded=False):
+        st.json(startup_data)
     
-    with st.expander("📝 Enter Your Startup Pitch", expanded=not bool(st.session_state.startup_pitch)):
-        startup_pitch = st.text_area(
-            "Describe your startup, target market, and unique value proposition",
-            value=st.session_state.startup_pitch,
-            height=200,
-            placeholder="Example: We are a B2B SaaS platform using AI to automate financial reporting..."
-        )
-        if startup_pitch != st.session_state.startup_pitch:
-            st.session_state.startup_pitch = startup_pitch
-    
+    # File uploader for VC list
     uploaded_file = st.file_uploader(
         "Upload your VC list (CSV with columns: name, website)",
         type=['csv']
     )
     
-    if uploaded_file and st.session_state.startup_pitch:
-        if st.button("🚀 Start VC Analysis"):
-            with st.spinner("Analyzing VCs..."):
-                results_df = process_vc_list(uploaded_file, st.session_state.startup_pitch)
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        analyze_uploaded = st.button("🔍 Analyze Uploaded VCs")
+    with col2:
+        discover_new = st.button("🌐 Discover New VCs")
+    
+    if analyze_uploaded and uploaded_file:
+        with st.spinner("Analyzing uploaded VCs..."):
+            results_df = process_vc_list(uploaded_file, startup_data)
+            
+            if not results_df.empty:
+                st.success(f"✅ Found {len(results_df)} matching VCs from your list!")
                 
-                if not results_df.empty:
-                    # Create download button for results
-                    csv = results_df.to_csv(index=False)
-                    st.download_button(
-                        "📥 Download Results",
-                        csv,
-                        "vc_analysis_results.csv",
-                        "text/csv",
-                        key='download-csv'
-                    )
-    else:
-        st.info("👆 Please upload a CSV file with VC information and provide your startup pitch to begin the analysis.")
+                # Create download button
+                csv = results_df.to_csv(index=False)
+                st.download_button(
+                    "📥 Download Results",
+                    csv,
+                    "vc_analysis_results.csv",
+                    "text/csv",
+                    key='download-csv-uploaded'
+                )
+    
+    if discover_new:
+        with st.spinner("Discovering new VCs..."):
+            discovered_df = find_additional_vcs(startup_data)
+            
+            if not discovered_df.empty:
+                st.success(f"✅ Discovered {len(discovered_df)} new matching VCs!")
+                
+                # Create download button
+                csv = discovered_df.to_csv(index=False)
+                st.download_button(
+                    "📥 Download Discovered VCs",
+                    csv,
+                    "discovered_vcs.csv",
+                    "text/csv",
+                    key='download-csv-discovered'
+                )
 
 if __name__ == "__main__":
     main()
