@@ -362,9 +362,9 @@ def load_startup_data() -> Dict[str, any]:
     startup_data = {
         'name': st.session_state.selected_startup['name'],
         'pitch': st.session_state.selected_startup.get('pitch', ''),
-        'industry': '',  # Will be extracted from documents
-        'stage': '',     # Will be extracted from documents
-        'location': '',  # Will be extracted from documents
+        'industry': st.session_state.selected_startup.get('industry', 'Not specified'),
+        'stage': st.session_state.selected_startup.get('stage', 'Not specified'),
+        'location': st.session_state.selected_startup.get('location', 'Not specified'),
         'documents': documents
     }
     
@@ -388,6 +388,21 @@ def load_startup_data() -> Dict[str, any]:
                 
         except json.JSONDecodeError:
             continue
+    
+    # Display current startup information
+    with st.expander("Current Startup Information", expanded=True):
+        st.markdown(f"""
+        ### {startup_data['name']}
+        
+        **Pitch**: {startup_data['pitch']}
+        
+        **Industry**: {startup_data['industry']}
+        **Stage**: {startup_data['stage']}
+        **Location**: {startup_data['location']}
+        """)
+        
+        if startup_data['industry'] == 'Not specified' or startup_data['stage'] == 'Not specified' or startup_data['location'] == 'Not specified':
+            st.warning("⚠️ Some startup information is missing. For better VC matching, please complete your startup profile in the Startup Manager.")
     
     return startup_data
 
@@ -532,21 +547,6 @@ def main():
     startup_data = load_startup_data()
     if not startup_data:
         st.stop()
-    
-    # Display startup information
-    with st.expander("📋 Current Startup Information", expanded=False):
-        st.markdown(f"""
-        ### {startup_data['name']}
-        
-        **Pitch**: {startup_data['pitch']}
-        
-        **Industry**: {startup_data['industry'] or 'Not specified'}
-        **Stage**: {startup_data['stage'] or 'Not specified'}
-        **Location**: {startup_data['location'] or 'Not specified'}
-        """)
-        
-        if not startup_data['industry'] or not startup_data['stage']:
-            st.warning("⚠️ Some startup information is missing. For better VC matching, please complete your startup profile in the Startup Manager.")
     
     # File uploader for VC list
     uploaded_file = st.file_uploader(
