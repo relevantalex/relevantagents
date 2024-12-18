@@ -3,8 +3,8 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 import logging
-from typing import List, Dict
-from urllib.parse import urlparse
+from typing import List, Dict, Optional
+from urllib.parse import urlparse, urljoin
 import os
 from database import DatabaseManager
 import time
@@ -13,241 +13,331 @@ from duckduckgo_search import DDGS
 import openai
 import re
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+import asyncio
+from tqdm import tqdm
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class VCScraper:
-    def __init__(self):
-        self.session = requests.Session()
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        self.ddgs = DDGS()
-        openai_api_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("api_keys", {}).get("openai_api_key")
-        if not openai_api_key:
-            raise ValueError("OpenAI API key not found")
-        self.openai_client = openai.OpenAI(api_key=openai_api_key)
+@dataclass
+class VCFirm:
+    name: str
+    url: str
+    description: str = ""
+    investment_focus: str = ""
+    emails: List[str] = None
+    linkedin_profiles: List[str] = None
+    relevance_score: float = 0.0
+    source: str = ""
+    
+    def __post_init__(self):
+        self.emails = self.emails or []
+        self.linkedin_profiles = self.linkedin_profiles or []
 
-    def find_relevant_vcs(self, startup_data: Dict[str, str]) -> List[Dict]:
-        """Find VCs that match the startup's profile with broader industry matching"""
-        industry = startup_data['industry']
-        stage = startup_data['stage']
+class VCSearchAgent:
+    """Agent responsible for initial VC discovery"""
+    def __init__(self):
+        self.ddgs = DDGS()
+        self.results = []
         
-        results = []
+    async def search(self, industry: str, stage: str, max_results: int = 200) -> List[VCFirm]:
+        search_terms = self._generate_search_terms(industry, stage)
+        all_results = []
         
-        # 1. Search Unicorn Nest
-        st.info("Searching Unicorn Nest database...")
-        unicorn_results = self._search_unicorn_nest(industry)
-        results.extend(unicorn_results)
-        
-        # 2. Web Search with very loose filters
-        st.info("Performing web search...")
-        web_results = self._broad_web_search(industry, stage)
-        results.extend(web_results)
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = []
+            for term in search_terms:
+                futures.append(
+                    executor.submit(self._search_term, term, max_results // len(search_terms))
+                )
+            
+            with st.spinner(f"🔍 Searching for VCs... (0/{len(futures)} queries complete)"):
+                for i, future in enumerate(futures):
+                    try:
+                        results = future.result()
+                        all_results.extend(results)
+                        st.spinner(f"🔍 Searching for VCs... ({i+1}/{len(futures)} queries complete)")
+                    except Exception as e:
+                        logger.error(f"Error in search: {str(e)}")
         
         # Deduplicate results
-        unique_results = self._deduplicate_results(results)
+        seen_urls = set()
+        unique_results = []
+        for vc in all_results:
+            if vc.url not in seen_urls:
+                seen_urls.add(vc.url)
+                unique_results.append(vc)
         
-        st.info(f"Found {len(unique_results)} potential VCs")
         return unique_results
 
-    def _search_unicorn_nest(self, industry: str) -> List[Dict]:
-        """Search VCs on Unicorn Nest"""
-        try:
-            # Base URL for Unicorn Nest funds
-            base_url = "https://unicorn-nest.com/funds/"
-            
-            # Make request to get the page
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
-            }
-            
-            # Try different search variations
-            results = []
-            search_terms = [industry] + industry.split()  # Split industry into individual words
-            
-            for term in search_terms:
-                try:
-                    search_url = f"{base_url}?search={term}"
-                    response = requests.get(search_url, headers=headers, timeout=10)
-                    if response.status_code == 200:
-                        soup = BeautifulSoup(response.text, 'html.parser')
-                        
-                        # Find fund entries
-                        fund_elements = soup.find_all('div', class_='fund-card')  # Adjust class based on actual HTML
-                        
-                        for fund in fund_elements:
-                            try:
-                                name = fund.find('h3').text.strip()
-                                description = fund.find('p', class_='description').text.strip()
-                                url = "https://unicorn-nest.com" + fund.find('a')['href']
-                                
-                                results.append({
-                                    'name': name,
-                                    'description': description,
-                                    'url': url,
-                                    'source': 'Unicorn Nest'
-                                })
-                            except Exception as e:
-                                continue
-                except Exception as e:
-                    logger.error(f"Error searching Unicorn Nest term {term}: {str(e)}")
-                    continue
-                    
-            return results
-            
-        except Exception as e:
-            logger.error(f"Error accessing Unicorn Nest: {str(e)}")
-            return []
-
-    def _broad_web_search(self, industry: str, stage: str) -> List[Dict]:
-        """Perform a broad web search for VCs with very loose filters"""
-        try:
-            # Get broader industry terms
-            broader_terms = self._get_broader_industry_terms(industry)
-            
-            # Generate very broad queries
-            queries = []
-            
-            # Industry-based queries
-            base_terms = [industry] + broader_terms
-            for term in base_terms:
-                queries.extend([
-                    f"{term} investors",
-                    f"{term} VC",
-                    f"venture capital {term}",
-                    f"investment firms {term}",
-                    "top venture capital firms",
-                    "active venture capital investors",
-                    "technology investors",
-                    "startup investors"
-                ])
-            
-            results = []
-            for query in queries:
-                try:
-                    # Increase max_results significantly
-                    search_results = self.ddgs.text(query, max_results=20)
-                    
-                    if not search_results:
-                        st.warning(f"No results found for query: {query}")
-                        continue
-                        
-                    for result in search_results:
-                        # Very loose filtering - accept almost anything that might be a VC
-                        if not self._is_obviously_not_vc(result['title'], result['body']):
-                            results.append({
-                                'name': result['title'],
-                                'description': result['body'],
-                                'url': result['link'],
-                                'source': 'Web Search'
-                            })
-                except Exception as e:
-                    logger.error(f"Error in web search for query '{query}': {str(e)}")
-                    continue
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"Error in broad web search: {str(e)}")
-            return []
-
-    def _is_obviously_not_vc(self, title: str, body: str) -> bool:
-        """Very loose check - only filter out obvious non-VCs"""
-        # Convert to lower case for comparison
-        text = (title + ' ' + body).lower()
-        
-        # List of terms that indicate this is definitely not a VC
-        obvious_non_vc = [
-            'wikipedia',
-            'dictionary',
-            'definition',
-            '.gov',
-            'news article',
-            'press release'
+    def _generate_search_terms(self, industry: str, stage: str) -> List[str]:
+        """Generate comprehensive search terms"""
+        terms = [
+            f"{industry} venture capital",
+            f"{industry} VC firms",
+            f"{industry} investors",
+            f"top {industry} VCs",
+            f"{stage} stage {industry} investors",
+            f"{industry} focused venture capital",
+            "technology venture capital firms",
+            "startup investors directory",
+            "venture capital directory",
+            "VC firms list"
         ]
         
-        return any(term in text for term in obvious_non_vc)
+        # Add variations
+        industry_terms = industry.split()
+        for term in industry_terms:
+            terms.extend([
+                f"{term} investors",
+                f"{term} venture capital",
+                f"VCs investing in {term}"
+            ])
+        
+        return list(set(terms))
 
-    def _get_broader_industry_terms(self, industry: str) -> List[str]:
-        """Get much broader industry terms"""
-        prompt = f"""
-        For the industry "{industry}", provide a JSON object with an array of related terms.
-        Include:
-        1. The industry itself
-        2. Broader categories
-        3. Related sectors
-        4. Technology areas
-        5. Market segments
-        6. Generic terms like "technology", "software", "digital"
-        
-        Format: {{"terms": ["term1", "term2", ...]}}
-        """
-        
+    def _search_term(self, term: str, max_results: int) -> List[VCFirm]:
+        """Search for a single term"""
+        results = []
         try:
+            search_results = self.ddgs.text(term, max_results=max_results)
+            for result in search_results:
+                if self._is_potential_vc(result['title'], result['body']):
+                    vc = VCFirm(
+                        name=result['title'],
+                        url=result['link'],
+                        description=result['body'],
+                        source='Web Search'
+                    )
+                    results.append(vc)
+        except Exception as e:
+            logger.error(f"Error searching term '{term}': {str(e)}")
+        
+        return results
+
+    def _is_potential_vc(self, title: str, body: str) -> bool:
+        """Loose check for potential VC firms"""
+        text = (title + ' ' + body).lower()
+        
+        # Skip obvious non-VCs
+        skip_terms = ['wikipedia', 'dictionary', '.gov', 'news article']
+        if any(term in text for term in skip_terms):
+            return False
+        
+        # Check for VC-related terms
+        vc_terms = [
+            'venture', 'capital', 'vc', 'investor', 'investment',
+            'fund', 'equity', 'portfolio', 'startup', 'ventures'
+        ]
+        return any(term in text for term in vc_terms)
+
+class VCEnrichmentAgent:
+    """Agent responsible for enriching VC data with website information"""
+    def __init__(self):
+        self.openai_client = openai.OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY") or st.secrets.get("api_keys", {}).get("openai_api_key")
+        )
+    
+    async def enrich_vcs(self, vcs: List[VCFirm], industry: str) -> List[VCFirm]:
+        """Enrich VC firms with website data and relevance scores"""
+        enriched_vcs = []
+        total = len(vcs)
+        
+        with st.spinner("🔍 Analyzing VC websites..."):
+            progress_bar = st.progress(0)
+            
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = []
+                for vc in vcs:
+                    futures.append(
+                        executor.submit(self._enrich_vc, vc, industry)
+                    )
+                
+                for i, future in enumerate(futures):
+                    try:
+                        enriched_vc = future.result()
+                        if enriched_vc:
+                            enriched_vcs.append(enriched_vc)
+                        progress_bar.progress((i + 1) / total)
+                    except Exception as e:
+                        logger.error(f"Error enriching VC {vcs[i].name}: {str(e)}")
+        
+        return sorted(enriched_vcs, key=lambda x: x.relevance_score, reverse=True)
+
+    def _enrich_vc(self, vc: VCFirm, industry: str) -> Optional[VCFirm]:
+        """Enrich a single VC firm"""
+        try:
+            # Scrape website content
+            content = self._scrape_website(vc.url)
+            if not content:
+                return None
+            
+            # Extract investment focus
+            vc.investment_focus = self._extract_investment_focus(content)
+            
+            # Calculate relevance score
+            vc.relevance_score = self._calculate_relevance(
+                vc.description + " " + vc.investment_focus,
+                industry
+            )
+            
+            return vc
+        except Exception as e:
+            logger.error(f"Error enriching {vc.name}: {str(e)}")
+            return None
+
+    def _scrape_website(self, url: str) -> Optional[str]:
+        """Scrape website content"""
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                # Remove script and style elements
+                for script in soup(["script", "style"]):
+                    script.decompose()
+                
+                # Get text content
+                text = soup.get_text()
+                lines = (line.strip() for line in text.splitlines())
+                chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+                text = ' '.join(chunk for chunk in chunks if chunk)
+                
+                return text
+            return None
+        except Exception as e:
+            logger.error(f"Error scraping {url}: {str(e)}")
+            return None
+
+    def _extract_investment_focus(self, content: str) -> str:
+        """Extract investment focus from website content"""
+        try:
+            prompt = f"""
+            Extract the investment focus from this VC firm's website content.
+            Focus on: industries, stages, check sizes, and geographic preferences.
+            
+            Content: {content[:2000]}  # Limit content length
+            
+            Return a concise summary (max 200 words).
+            """
+            
             response = self.openai_client.chat.completions.create(
                 model="gpt-4-turbo-preview",
                 messages=[
-                    {"role": "system", "content": "You are an expert at understanding industry categories and related sectors. Be comprehensive and include broader terms."},
+                    {"role": "system", "content": "You are an expert at analyzing VC firm websites."},
                     {"role": "user", "content": prompt}
-                ],
-                response_format={ "type": "json_object" }
+                ]
             )
             
-            result = json.loads(response.choices[0].message.content)
-            terms = result.get('terms', [industry])
-            
-            # Add some generic tech investment terms
-            terms.extend([
-                "technology",
-                "software",
-                "digital",
-                "innovation",
-                "startup",
-                "tech company"
-            ])
-            
-            return list(set(terms))  # Remove duplicates
+            return response.choices[0].message.content.strip()
         except Exception as e:
-            logger.error(f"Error getting broader industry terms: {str(e)}")
-            return [industry, "technology", "software", "startup"]
+            logger.error(f"Error extracting investment focus: {str(e)}")
+            return ""
 
-    def _deduplicate_results(self, results: List[Dict]) -> List[Dict]:
-        """Remove duplicate VC firms"""
-        seen = set()
-        unique_results = []
-        for result in results:
-            domain = urlparse(result['url']).netloc
-            if domain not in seen:
-                seen.add(domain)
-                unique_results.append(result)
-        return unique_results
-
-    def scrape_vc_info(self, vc: Dict) -> Dict:
-        """Scrape detailed information about a VC firm"""
+    def _calculate_relevance(self, vc_text: str, industry: str) -> float:
+        """Calculate relevance score"""
         try:
-            response = requests.get(vc['url'], headers=self.headers, timeout=10)
-            soup = BeautifulSoup(response.text, 'html.parser')
+            prompt = f"""
+            Rate how relevant this VC firm is for a startup in the {industry} industry.
             
-            # Extract contact information
-            emails = self._extract_emails(response.text)
-            linkedin = self._extract_linkedin_profiles(soup)
+            VC Description: {vc_text[:1000]}
             
-            # Extract investment focus
-            focus = self._extract_investment_focus(soup)
+            Return only a number between 0 and 1, where 1 is highly relevant.
+            """
             
-            return {
-                **vc,
-                'emails': emails,
-                'linkedin_profiles': linkedin,
-                'investment_focus': focus
-            }
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                messages=[
+                    {"role": "system", "content": "You are an expert at matching VCs to startups."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            
+            score = float(response.choices[0].message.content.strip())
+            return min(max(score, 0), 1)  # Ensure between 0 and 1
         except Exception as e:
-            logger.error(f"Error scraping VC info: {str(e)}")
+            logger.error(f"Error calculating relevance: {str(e)}")
+            return 0.0
+
+class VCContactAgent:
+    """Agent responsible for finding contact information"""
+    def __init__(self):
+        pass
+    
+    async def find_contacts(self, vcs: List[VCFirm]) -> List[VCFirm]:
+        """Find contact information for VC firms"""
+        with st.spinner("📧 Finding contact information..."):
+            progress_bar = st.progress(0)
+            total = len(vcs)
+            
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = []
+                for vc in vcs:
+                    futures.append(
+                        executor.submit(self._find_vc_contacts, vc)
+                    )
+                
+                for i, future in enumerate(futures):
+                    try:
+                        vc = future.result()
+                        progress_bar.progress((i + 1) / total)
+                    except Exception as e:
+                        logger.error(f"Error finding contacts: {str(e)}")
+        
+        return vcs
+
+    def _find_vc_contacts(self, vc: VCFirm) -> VCFirm:
+        """Find contacts for a single VC firm"""
+        try:
+            # Get all pages to search
+            pages_to_search = self._get_contact_pages(vc.url)
+            
+            for url in pages_to_search:
+                try:
+                    response = requests.get(url, timeout=10)
+                    if response.status_code == 200:
+                        # Extract emails
+                        emails = self._extract_emails(response.text)
+                        vc.emails.extend(emails)
+                        
+                        # Extract LinkedIn profiles
+                        soup = BeautifulSoup(response.text, 'html.parser')
+                        linkedin_profiles = self._extract_linkedin_profiles(soup)
+                        vc.linkedin_profiles.extend(linkedin_profiles)
+                except Exception as e:
+                    logger.error(f"Error processing page {url}: {str(e)}")
+                    continue
+            
+            # Remove duplicates
+            vc.emails = list(set(vc.emails))
+            vc.linkedin_profiles = list(set(vc.linkedin_profiles))
+            
             return vc
+        except Exception as e:
+            logger.error(f"Error finding contacts for {vc.name}: {str(e)}")
+            return vc
+
+    def _get_contact_pages(self, base_url: str) -> List[str]:
+        """Get URLs of pages likely to contain contact information"""
+        contact_paths = [
+            '/contact', '/contact-us', '/team', '/about', '/about-us',
+            '/people', '/our-team', '/partners', '/investors'
+        ]
+        
+        pages = [base_url]  # Always include homepage
+        parsed_url = urlparse(base_url)
+        base = f"{parsed_url.scheme}://{parsed_url.netloc}"
+        
+        for path in contact_paths:
+            pages.append(urljoin(base, path))
+        
+        return pages
 
     def _extract_emails(self, text: str) -> List[str]:
         """Extract email addresses from text"""
@@ -261,58 +351,82 @@ class VCScraper:
             href = a['href']
             if 'linkedin.com/in/' in href:
                 linkedin_links.append(href)
-        return list(set(linkedin_links))
+        return linkedin_links
 
-    def _extract_investment_focus(self, soup) -> str:
-        """Extract investment focus information"""
-        # Look for common sections that might contain investment focus
-        focus_keywords = ['investment', 'focus', 'strategy', 'thesis']
-        text_blocks = []
-        
-        for keyword in focus_keywords:
-            elements = soup.find_all(['p', 'div', 'section'], 
-                                  string=re.compile(keyword, re.I))
-            for element in elements:
-                text_blocks.append(element.get_text().strip())
-        
-        return ' '.join(text_blocks)[:500] if text_blocks else ""
+async def find_relevant_vcs(startup_data: Dict[str, str]) -> List[VCFirm]:
+    """Main function to find and analyze VC firms"""
+    # Initialize agents
+    search_agent = VCSearchAgent()
+    enrichment_agent = VCEnrichmentAgent()
+    contact_agent = VCContactAgent()
+    
+    # Phase 1: Initial VC Discovery
+    st.subheader("Phase 1: Initial VC Discovery")
+    vcs = await search_agent.search(
+        industry=startup_data['industry'],
+        stage=startup_data['stage']
+    )
+    st.info(f"Found {len(vcs)} potential VC firms")
+    
+    # Phase 2: Enrich VC Data
+    st.subheader("Phase 2: Analyzing VC Firms")
+    vcs = await enrichment_agent.enrich_vcs(vcs, startup_data['industry'])
+    st.info(f"Analyzed {len(vcs)} VC firms")
+    
+    # Phase 3: Find Contact Information
+    st.subheader("Phase 3: Finding Contact Information")
+    vcs = await contact_agent.find_contacts(vcs)
+    
+    return vcs
 
-    def generate_outreach_email(self, vc_info: Dict, startup_data: Dict) -> str:
-        """Generate a personalized outreach email"""
-        prompt = f"""
-        Create a concise, personalized email to a VC.
-        
-        VC Firm: {vc_info['name']}
-        VC Focus: {vc_info.get('investment_focus', 'Not available')}
-        
-        Startup:
-        Name: {startup_data['name']}
-        Industry: {startup_data['industry']}
-        Stage: {startup_data['stage']}
-        Pitch: {startup_data['pitch']}
-        
-        Requirements:
-        1. Keep it under 200 words
-        2. Mention specific alignment with VC's focus
-        3. Include key metrics or achievements
-        4. End with a clear call to action
-        5. Mention that a one-pager is attached
-        
-        Return only the email text, no subject line.
-        """
-        
-        try:
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4-turbo-preview",
-                messages=[
-                    {"role": "system", "content": "You are an expert at writing concise, effective VC outreach emails."},
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            logger.error(f"Error generating email: {str(e)}")
-            return ""
+def display_results(vcs: List[VCFirm]):
+    """Display results in a nice format"""
+    st.header("🎯 Results")
+    
+    # Display statistics
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total VCs Found", len(vcs))
+    with col2:
+        relevant_vcs = len([vc for vc in vcs if vc.relevance_score > 0.7])
+        st.metric("Highly Relevant VCs", relevant_vcs)
+    with col3:
+        vcs_with_contacts = len([vc for vc in vcs if vc.emails or vc.linkedin_profiles])
+        st.metric("VCs with Contacts", vcs_with_contacts)
+    
+    # Display VCs in expandable cards
+    for vc in vcs:
+        with st.expander(f"🏢 {vc.name} (Relevance: {vc.relevance_score:.2f})", expanded=False):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**Website:**", vc.url)
+                st.write("**Description:**", vc.description)
+                if vc.investment_focus:
+                    st.write("**Investment Focus:**", vc.investment_focus)
+            
+            with col2:
+                if vc.emails:
+                    st.write("**📧 Contact Emails:**")
+                    for email in vc.emails:
+                        st.write(f"- {email}")
+                
+                if vc.linkedin_profiles:
+                    st.write("**👥 LinkedIn Profiles:**")
+                    for profile in vc.linkedin_profiles:
+                        st.write(f"- {profile}")
+    
+    # Export results
+    if vcs:
+        df = pd.DataFrame([vars(vc) for vc in vcs])
+        csv = df.to_csv(index=False)
+        st.download_button(
+            "📥 Download Results as CSV",
+            csv,
+            "vc_outreach_list.csv",
+            "text/csv",
+            key='download-csv'
+        )
 
 def load_startup_data() -> Dict[str, any]:
     """Load startup data from the database"""
@@ -375,80 +489,10 @@ def main():
     st.write(f"**Location:** {startup_data['location']}")
     st.write(f"**Pitch:** {startup_data['pitch']}")
     
-    # Initialize scraper
-    scraper = VCScraper()
-    
     # Start search button
     if st.button("🔎 Find Matching VCs", use_container_width=True):
-        with st.spinner("Searching for relevant VCs..."):
-            # Find relevant VCs
-            vcs = scraper.find_relevant_vcs(startup_data)
-            
-            if not vcs:
-                st.warning("No matching VCs found. Try adjusting your startup profile.")
-                return
-            
-            # Process each VC
-            results = []
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            for idx, vc in enumerate(vcs):
-                progress = (idx + 1) / len(vcs)
-                progress_bar.progress(progress)
-                status_text.text(f"Processing {vc['name']}...")
-                
-                # Scrape detailed info
-                vc_info = scraper.scrape_vc_info(vc)
-                
-                # Generate outreach email
-                outreach_email = scraper.generate_outreach_email(vc_info, startup_data)
-                
-                results.append({
-                    **vc_info,
-                    'outreach_email': outreach_email
-                })
-            
-            progress_bar.empty()
-            status_text.empty()
-            
-            # Display results
-            st.subheader("📊 Results")
-            
-            for vc in results:
-                with st.expander(f"🏢 {vc['name']}", expanded=False):
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.write("**Website:**", vc['url'])
-                        st.write("**Description:**", vc['description'])
-                        if vc.get('investment_focus'):
-                            st.write("**Investment Focus:**", vc['investment_focus'])
-                    
-                    with col2:
-                        if vc.get('emails'):
-                            st.write("**Contact Emails:**")
-                            for email in vc['emails']:
-                                st.write(f"- {email}")
-                        
-                        if vc.get('linkedin_profiles'):
-                            st.write("**LinkedIn Profiles:**")
-                            for profile in vc['linkedin_profiles']:
-                                st.write(f"- {profile}")
-                    
-                    st.write("**📧 Suggested Outreach Email:**")
-                    st.text_area("Email Text", vc['outreach_email'], height=200, key=f"email_{vc['name']}")
-            
-            # Create downloadable results
-            df = pd.DataFrame(results)
-            csv = df.to_csv(index=False)
-            st.download_button(
-                "📥 Download Results as CSV",
-                csv,
-                "vc_outreach_list.csv",
-                "text/csv",
-                key='download-csv'
-            )
+        vcs = asyncio.run(find_relevant_vcs(startup_data))
+        display_results(vcs)
 
 if __name__ == "__main__":
     main()
