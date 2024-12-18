@@ -190,16 +190,12 @@ def main():
             # Save all fields button
             if st.button("Save Changes"):
                 try:
-                    db.update_startup_info(
-                        startup_id,  # Use the correct startup ID
-                        {
-                            'pitch': pitch,
-                            'industry': industry,
-                            'stage': stage,
-                            'location': location
-                        }
-                    )
-                    st.success("Changes saved successfully!")
+                    # For now, only update the pitch since other columns don't exist yet
+                    db.update_startup_pitch(startup_id, pitch)
+                    
+                    # Show a note about other fields
+                    st.info("Note: Currently only saving the pitch. Other fields will be saved once the database schema is updated.")
+                    st.success("Pitch saved successfully!")
                     time.sleep(1)
                     st.rerun()
                 except Exception as e:
