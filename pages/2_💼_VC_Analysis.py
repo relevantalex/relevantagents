@@ -14,6 +14,7 @@ from anthropic import Anthropic
 import openai
 import os
 from duckduckgo_search import DDGS
+import json
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO)
@@ -330,12 +331,64 @@ class VCAnalyzer:
 def load_startup_data() -> Dict[str, any]:
     """Load startup data from the database"""
     db = DatabaseManager()
-    startup_data = db.get_startup_info()
     
-    if not startup_data:
-        st.error("No startup data found. Please set up your startup information in the Startup Manager first.")
+    # Get all startups
+    startups = db.get_startups()
+    if not startups:
+        st.error("No startups found. Please create a startup in the Startup Manager first.")
         return None
+    
+    # Get selected startup from session state or select the first one
+    if 'selected_startup' not in st.session_state:
+        st.session_state.selected_startup = startups[0]
+    
+    # Create startup selector in sidebar
+    with st.sidebar:
+        st.subheader("Startup Selection")
+        startup_names = [s['name'] for s in startups]
+        selected_name = st.selectbox(
+            "Select Startup",
+            startup_names,
+            index=startup_names.index(st.session_state.selected_startup['name'])
+        )
         
+        # Update selected startup in session state
+        st.session_state.selected_startup = next(s for s in startups if s['name'] == selected_name)
+    
+    # Get startup documents
+    documents = db.get_documents(st.session_state.selected_startup['id'])
+    
+    # Prepare startup data
+    startup_data = {
+        'name': st.session_state.selected_startup['name'],
+        'pitch': st.session_state.selected_startup.get('pitch', ''),
+        'industry': '',  # Will be extracted from documents
+        'stage': '',     # Will be extracted from documents
+        'location': '',  # Will be extracted from documents
+        'documents': documents
+    }
+    
+    # Try to extract additional information from documents
+    for doc in documents:
+        content = doc.get('content', '')
+        if not content:
+            continue
+            
+        try:
+            doc_data = json.loads(content)
+            
+            # Extract industry information
+            if doc.get('type') == 'industry_analysis':
+                startup_data['industry'] = doc_data.get('industry', '')
+            
+            # Extract stage information
+            if doc.get('type') == 'company_info':
+                startup_data['stage'] = doc_data.get('stage', '')
+                startup_data['location'] = doc_data.get('location', '')
+                
+        except json.JSONDecodeError:
+            continue
+    
     return startup_data
 
 def process_vc_list(uploaded_file, startup_data: Dict[str, any]) -> pd.DataFrame:
@@ -473,6 +526,7 @@ def find_additional_vcs(startup_data: Dict[str, any]) -> pd.DataFrame:
 
 def main():
     st.title("🎯 VC Analysis")
+    st.caption("Find and analyze potential venture capital investors")
     
     # Load startup data from database
     startup_data = load_startup_data()
@@ -480,8 +534,19 @@ def main():
         st.stop()
     
     # Display startup information
-    with st.expander("📋 Startup Information", expanded=False):
-        st.json(startup_data)
+    with st.expander("📋 Current Startup Information", expanded=False):
+        st.markdown(f"""
+        ### {startup_data['name']}
+        
+        **Pitch**: {startup_data['pitch']}
+        
+        **Industry**: {startup_data['industry'] or 'Not specified'}
+        **Stage**: {startup_data['stage'] or 'Not specified'}
+        **Location**: {startup_data['location'] or 'Not specified'}
+        """)
+        
+        if not startup_data['industry'] or not startup_data['stage']:
+            st.warning("⚠️ Some startup information is missing. For better VC matching, please complete your startup profile in the Startup Manager.")
     
     # File uploader for VC list
     uploaded_file = st.file_uploader(
