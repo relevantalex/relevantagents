@@ -6,6 +6,9 @@ from typing import Dict, List
 import json
 import uuid
 import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 def show_json_guide():
     st.markdown("""
@@ -190,16 +193,34 @@ def main():
             # Save all fields button
             if st.button("Save Changes"):
                 try:
-                    # For now, only update the pitch since other columns don't exist yet
-                    db.update_startup_pitch(startup_id, pitch)
+                    # First try to update all fields
+                    db.update_startup_info(
+                        startup_id,
+                        {
+                            'pitch': pitch,
+                            'industry': industry,
+                            'stage': stage,
+                            'location': location
+                        }
+                    )
                     
-                    # Show a note about other fields
-                    st.info("Note: Currently only saving the pitch. Other fields will be saved once the database schema is updated.")
-                    st.success("Pitch saved successfully!")
+                    st.success("Changes saved successfully!")
+                    
+                    # Show which fields were updated
+                    if industry != selected_startup.get('industry', ''):
+                        st.info("Industry updated")
+                    if stage != selected_startup.get('stage', ''):
+                        st.info("Stage updated")
+                    if location != selected_startup.get('location', ''):
+                        st.info("Location updated")
+                    if pitch != selected_startup.get('pitch', ''):
+                        st.info("Pitch updated")
+                    
                     time.sleep(1)
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error saving changes: {str(e)}")
+                    logger.error(f"Error saving startup changes: {str(e)}")
     
     st.divider()
     
