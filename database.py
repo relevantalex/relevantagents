@@ -162,14 +162,13 @@ class DatabaseManager:
     def update_startup_info(self, startup_id: str, info: Dict[str, str]) -> Dict:
         """Update startup information including pitch, industry, stage, and location"""
         try:
-            # Validate and sanitize input
-            valid_fields = ['pitch', 'industry', 'stage', 'location']
-            update_data = {k: str(v) for k, v in info.items() if k in valid_fields}
+            # For now, only update the pitch until we add the new columns
+            update_data = {"pitch": info.get('pitch', '')}
             
             # Log the update attempt
-            logger.info(f"Updating startup {startup_id} with info: {update_data}")
+            logger.info(f"Updating startup {startup_id} with pitch")
             
-            # Update all fields in a single operation
+            # Update pitch only for now
             response = self.supabase.table("startups").update(update_data).eq("id", startup_id).execute()
             
             if not response.data:

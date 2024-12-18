@@ -139,6 +139,14 @@ def main():
     
     # Get selected startup data
     if startups:
+        # Clear cached data when startup selection changes
+        if 'selected_startup_name' in st.session_state and st.session_state.selected_startup_name != selected_startup_name:
+            st.session_state.selected_startup = None
+        
+        # Update selected startup in session state
+        st.session_state.selected_startup_name = selected_startup_name
+        
+        # Get fresh startup data
         selected_startup = next(s for s in startups if s['name'] == selected_startup_name)
         startup_id = selected_startup['id']  # Get the startup ID
     else:
