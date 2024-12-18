@@ -99,19 +99,34 @@ class IndustryAnalysisAgent:
             raise
     
     async def _extract_industry_terms(self, startup_data: Dict[str, str]) -> List[str]:
-        prompt = f"""
-        Analyze this startup's information and extract key industry terms and categories:
+        prompt = f"""You are an AI trained to analyze startup information and extract relevant industry terms.
         
+        Based on the following startup information, provide a JSON array of relevant industry terms and categories.
+        The response should be ONLY a valid JSON array of strings, nothing else.
+
+        Startup Information:
         Industry: {startup_data['industry']}
         Pitch: {startup_data['pitch']}
         Stage: {startup_data['stage']}
         
-        Return only a JSON array of relevant industry terms and categories.
+        Example response format:
+        ["term1", "term2", "term3"]
         """
         
-        response = await self._get_gpt4_response(prompt)
-        return json.loads(response)
-    
+        try:
+            response = await self._get_gpt4_response(prompt)
+            # Clean the response and ensure it's valid JSON
+            response = response.strip()
+            if not response.startswith('['):
+                response = '[' + response
+            if not response.endswith(']'):
+                response = response + ']'
+            return json.loads(response)
+        except json.JSONDecodeError as e:
+            logger.error(f"Error parsing GPT-4 response: {response}")
+            # Return a basic array with the industry if parsing fails
+            return [startup_data['industry']]
+            
     async def _research_trends(self, industry_terms: List[str]) -> List[Dict]:
         trends = []
         ddgs = DDGS()
@@ -133,31 +148,69 @@ class IndustryAnalysisAgent:
         return trends
     
     async def _identify_key_players(self, industry_terms: List[str]) -> List[Dict]:
-        prompt = f"""
+        prompt = f"""You are an AI trained to identify key companies in specific industries.
+        
         For these industry terms: {', '.join(industry_terms)}
         
-        List the top companies and their unique value propositions.
-        Return as JSON array with 'name' and 'value_prop' fields.
+        Return a JSON array of objects with the top companies and their value propositions.
+        The response should be ONLY a valid JSON array, nothing else.
+        
+        Example response format:
+        [
+            {{"name": "Company1", "value_prop": "Description1"}},
+            {{"name": "Company2", "value_prop": "Description2"}}
+        ]
         """
         
-        response = await self._get_gpt4_response(prompt)
-        return json.loads(response)
+        try:
+            response = await self._get_gpt4_response(prompt)
+            # Clean the response and ensure it's valid JSON
+            response = response.strip()
+            if not response.startswith('['):
+                response = '[' + response
+            if not response.endswith(']'):
+                response = response + ']'
+            return json.loads(response)
+        except json.JSONDecodeError as e:
+            logger.error(f"Error parsing GPT-4 response: {response}")
+            return [{"name": "Analysis Failed", "value_prop": "Could not parse key players"}]
     
     async def _analyze_market(self, industry_terms: List[str], key_players: List[Dict]) -> Dict:
-        prompt = f"""
-        Analyze the market dynamics for:
+        prompt = f"""You are an AI trained to analyze market dynamics.
+        
+        Analyze the market for:
         Industry Terms: {', '.join(industry_terms)}
         Key Players: {json.dumps(key_players)}
         
-        Return a JSON object with:
-        - market_size
-        - growth_rate
-        - key_challenges
-        - opportunities
+        Return a JSON object with market analysis.
+        The response should be ONLY a valid JSON object, nothing else.
+        
+        Example response format:
+        {{
+            "market_size": "Size description",
+            "growth_rate": "Growth description",
+            "key_challenges": ["Challenge 1", "Challenge 2"],
+            "opportunities": ["Opportunity 1", "Opportunity 2"]
+        }}
         """
         
-        response = await self._get_gpt4_response(prompt)
-        return json.loads(response)
+        try:
+            response = await self._get_gpt4_response(prompt)
+            # Clean the response and ensure it's valid JSON
+            response = response.strip()
+            if not response.startswith('{'):
+                response = '{' + response
+            if not response.endswith('}'):
+                response = response + '}'
+            return json.loads(response)
+        except json.JSONDecodeError as e:
+            logger.error(f"Error parsing GPT-4 response: {response}")
+            return {
+                "market_size": "Analysis Failed",
+                "growth_rate": "Analysis Failed",
+                "key_challenges": ["Could not parse market analysis"],
+                "opportunities": ["Could not parse market analysis"]
+            }
     
     async def _get_gpt4_response(self, prompt: str) -> str:
         try:
@@ -165,9 +218,10 @@ class IndustryAnalysisAgent:
                 self.openai_client.chat.completions.create,
                 model="gpt-4-turbo-preview",
                 messages=[
-                    {"role": "system", "content": "You are an expert industry analyst AI."},
+                    {"role": "system", "content": "You are an expert industry analyst AI. Always respond with valid JSON only, no additional text."},
                     {"role": "user", "content": prompt}
-                ]
+                ],
+                response_format={ "type": "json_object" }
             )
             return response.choices[0].message.content
         except Exception as e:
