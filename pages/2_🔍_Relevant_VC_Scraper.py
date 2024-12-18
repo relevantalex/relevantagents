@@ -37,41 +37,264 @@ class VCFirm:
         self.emails = self.emails or []
         self.linkedin_profiles = self.linkedin_profiles or []
 
-class VCSearchAgent:
-    """Agent responsible for initial VC discovery"""
+class SearchProvider:
+    """Base class for search providers"""
+    def search(self, query: str, max_results: int) -> List[Dict]:
+        raise NotImplementedError
+
+class DuckDuckGoProvider(SearchProvider):
     def __init__(self):
         self.ddgs = DDGS()
+    
+    def search(self, query: str, max_results: int) -> List[Dict]:
+        try:
+            results = self.ddgs.text(query, max_results=max_results)
+            return [
+                {
+                    'title': r['title'],
+                    'description': r['body'],
+                    'url': r['link']
+                } for r in results
+            ]
+        except Exception as e:
+            logger.error(f"DuckDuckGo search error: {str(e)}")
+            return []
+
+class BraveSearchProvider(SearchProvider):
+    def __init__(self):
+        self.api_key = os.getenv("BRAVE_API_KEY") or st.secrets.get("api_keys", {}).get("brave_api_key")
+        if not self.api_key:
+            logger.warning("Brave Search API key not found")
+    
+    def search(self, query: str, max_results: int) -> List[Dict]:
+        if not self.api_key:
+            return []
+            
+        try:
+            headers = {"X-Subscription-Token": self.api_key}
+            params = {
+                "q": query,
+                "count": min(max_results, 100)
+            }
+            response = requests.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                headers=headers,
+                params=params
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return [
+                    {
+                        'title': result['title'],
+                        'description': result.get('description', ''),
+                        'url': result['url']
+                    }
+                    for result in data.get('web', {}).get('results', [])
+                ]
+            return []
+        except Exception as e:
+            logger.error(f"Brave search error: {str(e)}")
+            return []
+
+class GoogleSearchProvider(SearchProvider):
+    def __init__(self):
+        self.api_key = os.getenv("GOOGLE_API_KEY") or st.secrets.get("api_keys", {}).get("google_api_key")
+        self.cx = os.getenv("GOOGLE_CX") or st.secrets.get("api_keys", {}).get("google_cx")
+        if not (self.api_key and self.cx):
+            logger.warning("Google Search API credentials not found")
+    
+    def search(self, query: str, max_results: int) -> List[Dict]:
+        if not (self.api_key and self.cx):
+            return []
+            
+        try:
+            url = "https://www.googleapis.com/customsearch/v1"
+            results = []
+            
+            # Google API returns max 10 results per request
+            for start in range(1, min(max_results + 1, 101), 10):
+                params = {
+                    'key': self.api_key,
+                    'cx': self.cx,
+                    'q': query,
+                    'start': start
+                }
+                response = requests.get(url, params=params)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    for item in data.get('items', []):
+                        results.append({
+                            'title': item['title'],
+                            'description': item.get('snippet', ''),
+                            'url': item['link']
+                        })
+                
+                if len(results) >= max_results:
+                    break
+            
+            return results[:max_results]
+        except Exception as e:
+            logger.error(f"Google search error: {str(e)}")
+            return []
+
+class CrunchbaseProvider:
+    def __init__(self):
+        self.api_key = os.getenv("CRUNCHBASE_API_KEY") or st.secrets.get("api_keys", {}).get("crunchbase_api_key")
+        if not self.api_key:
+            logger.warning("Crunchbase API key not found")
+    
+    def search(self, industry: str) -> List[Dict]:
+        if not self.api_key:
+            return []
+            
+        try:
+            headers = {"X-cb-user-key": self.api_key}
+            params = {
+                "field_ids": ["name", "short_description", "website_url", "investor_type"],
+                "query": [
+                    {
+                        "type": "predicate",
+                        "field_id": "investor_type",
+                        "operator_id": "includes",
+                        "values": ["venture_capital"]
+                    },
+                    {
+                        "type": "predicate",
+                        "field_id": "investment_categories",
+                        "operator_id": "includes",
+                        "values": [industry]
+                    }
+                ]
+            }
+            
+            response = requests.post(
+                "https://api.crunchbase.com/api/v4/searches/organizations",
+                headers=headers,
+                json=params
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return [
+                    {
+                        'title': item['properties']['name'],
+                        'description': item['properties'].get('short_description', ''),
+                        'url': item['properties'].get('website_url', '')
+                    }
+                    for item in data.get('entities', [])
+                ]
+            return []
+        except Exception as e:
+            logger.error(f"Crunchbase search error: {str(e)}")
+            return []
+
+class VCSearchAgent:
+    """Agent responsible for initial VC discovery using multiple sources"""
+    def __init__(self):
+        self.search_providers = [
+            DuckDuckGoProvider(),
+            BraveSearchProvider(),
+            GoogleSearchProvider()
+        ]
+        self.crunchbase = CrunchbaseProvider()
         self.results = []
-        
+    
     async def search(self, industry: str, stage: str, max_results: int = 200) -> List[VCFirm]:
-        search_terms = self._generate_search_terms(industry, stage)
         all_results = []
+        
+        # 1. Search using multiple search engines
+        search_terms = self._generate_search_terms(industry, stage)
         
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = []
-            for term in search_terms:
-                futures.append(
-                    executor.submit(self._search_term, term, max_results // len(search_terms))
-                )
+            
+            # Submit search tasks for each provider and search term
+            for provider in self.search_providers:
+                for term in search_terms:
+                    futures.append(
+                        executor.submit(
+                            provider.search,
+                            term,
+                            max_results // (len(self.search_providers) * len(search_terms))
+                        )
+                    )
+            
+            # Add Crunchbase search
+            futures.append(executor.submit(self.crunchbase.search, industry))
             
             with st.spinner(f"🔍 Searching for VCs... (0/{len(futures)} queries complete)"):
                 for i, future in enumerate(futures):
                     try:
                         results = future.result()
-                        all_results.extend(results)
+                        for result in results:
+                            if self._is_potential_vc(result['title'], result['description']):
+                                vc = VCFirm(
+                                    name=result['title'],
+                                    url=result['url'],
+                                    description=result['description'],
+                                    source='Search Results'
+                                )
+                                all_results.append(vc)
                         st.spinner(f"🔍 Searching for VCs... ({i+1}/{len(futures)} queries complete)")
                     except Exception as e:
                         logger.error(f"Error in search: {str(e)}")
+        
+        # Add specialized VC database searches
+        all_results.extend(await self._search_unicorn_nest(industry))
         
         # Deduplicate results
         seen_urls = set()
         unique_results = []
         for vc in all_results:
-            if vc.url not in seen_urls:
-                seen_urls.add(vc.url)
+            domain = urlparse(vc.url).netloc
+            if domain not in seen_urls:
+                seen_urls.add(domain)
                 unique_results.append(vc)
         
+        st.success(f"Found {len(unique_results)} potential VCs across all sources")
         return unique_results
+
+    async def _search_unicorn_nest(self, industry: str) -> List[VCFirm]:
+        """Search VCs on Unicorn Nest"""
+        results = []
+        try:
+            base_url = "https://unicorn-nest.com/funds/"
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            # Try multiple search variations
+            search_terms = [industry] + industry.split()
+            for term in search_terms:
+                try:
+                    response = requests.get(
+                        f"{base_url}?search={term}",
+                        headers=headers,
+                        timeout=10
+                    )
+                    
+                    if response.status_code == 200:
+                        soup = BeautifulSoup(response.text, 'html.parser')
+                        for fund in soup.find_all(class_='fund-card'):
+                            try:
+                                vc = VCFirm(
+                                    name=fund.find('h3').text.strip(),
+                                    url=urljoin(base_url, fund.find('a')['href']),
+                                    description=fund.find(class_='description').text.strip(),
+                                    source='Unicorn Nest'
+                                )
+                                results.append(vc)
+                            except Exception:
+                                continue
+                except Exception as e:
+                    logger.error(f"Error searching Unicorn Nest term {term}: {str(e)}")
+            
+        except Exception as e:
+            logger.error(f"Error accessing Unicorn Nest: {str(e)}")
+        
+        return results
 
     def _generate_search_terms(self, industry: str, stage: str) -> List[str]:
         """Generate comprehensive search terms"""
@@ -82,10 +305,14 @@ class VCSearchAgent:
             f"top {industry} VCs",
             f"{stage} stage {industry} investors",
             f"{industry} focused venture capital",
-            "technology venture capital firms",
-            "startup investors directory",
-            "venture capital directory",
-            "VC firms list"
+            "venture capital firms directory",
+            "VC firms database",
+            "venture capital investors list",
+            "active venture capital firms",
+            f"who invests in {industry}",
+            f"leading {industry} investors",
+            f"{industry} investment firms",
+            "technology venture capital"
         ]
         
         # Add variations
@@ -94,43 +321,30 @@ class VCSearchAgent:
             terms.extend([
                 f"{term} investors",
                 f"{term} venture capital",
-                f"VCs investing in {term}"
+                f"VCs investing in {term}",
+                f"{term} focused funds"
             ])
         
         return list(set(terms))
 
-    def _search_term(self, term: str, max_results: int) -> List[VCFirm]:
-        """Search for a single term"""
-        results = []
-        try:
-            search_results = self.ddgs.text(term, max_results=max_results)
-            for result in search_results:
-                if self._is_potential_vc(result['title'], result['body']):
-                    vc = VCFirm(
-                        name=result['title'],
-                        url=result['link'],
-                        description=result['body'],
-                        source='Web Search'
-                    )
-                    results.append(vc)
-        except Exception as e:
-            logger.error(f"Error searching term '{term}': {str(e)}")
-        
-        return results
-
-    def _is_potential_vc(self, title: str, body: str) -> bool:
-        """Loose check for potential VC firms"""
-        text = (title + ' ' + body).lower()
+    def _is_potential_vc(self, title: str, description: str) -> bool:
+        """Improved check for potential VC firms"""
+        text = (title + ' ' + description).lower()
         
         # Skip obvious non-VCs
-        skip_terms = ['wikipedia', 'dictionary', '.gov', 'news article']
+        skip_terms = [
+            'wikipedia', 'dictionary', '.gov', 'news article',
+            'press release', 'job posting', 'linkedin.com/jobs'
+        ]
         if any(term in text for term in skip_terms):
             return False
         
         # Check for VC-related terms
         vc_terms = [
             'venture', 'capital', 'vc', 'investor', 'investment',
-            'fund', 'equity', 'portfolio', 'startup', 'ventures'
+            'fund', 'equity', 'portfolio', 'startup', 'ventures',
+            'partners', 'investments', 'venture partners',
+            'capital partners', 'investment firm'
         ]
         return any(term in text for term in vc_terms)
 
