@@ -59,7 +59,11 @@ class IndustryAnalysisAgent:
             "Industry Analysis Agent",
             "Analyzing industry landscape and identifying key trends"
         )
-        self.openai_client = openai.OpenAI()
+        # Initialize OpenAI client with API key
+        openai_api_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("api_keys", {}).get("openai_api_key")
+        if not openai_api_key:
+            raise ValueError("OpenAI API key not found in environment variables or Streamlit secrets")
+        self.openai_client = openai.OpenAI(api_key=openai_api_key)
     
     async def analyze(self, startup_data: Dict[str, str]) -> Dict:
         self.status.start()
@@ -297,6 +301,17 @@ def main():
     
     st.title("🔍 Relevant VC Scraper")
     st.caption("Intelligent multi-agent system for finding your perfect VC match")
+    
+    # Check for OpenAI API key
+    if not (os.getenv("OPENAI_API_KEY") or st.secrets.get("api_keys", {}).get("openai_api_key")):
+        st.error("""
+        ⚠️ OpenAI API key is missing!
+        
+        Please set your OpenAI API key in one of these ways:
+        1. Add it to your environment variables as OPENAI_API_KEY
+        2. Add it to your Streamlit secrets.toml file under [api_keys] openai_api_key
+        """)
+        return
     
     # Load startup data
     startup_data = load_startup_data()
