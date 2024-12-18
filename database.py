@@ -39,7 +39,11 @@ class DatabaseManager:
     def get_startups(self) -> List[Dict]:
         """Get all startups"""
         try:
+            logger.info("Fetching all startups from database")
             response = self.supabase.table("startups").select("*").execute()
+            logger.info(f"Retrieved {len(response.data)} startups")
+            for startup in response.data:
+                logger.info(f"Startup data: {startup}")
             return response.data
         except Exception as e:
             logger.error(f"Error fetching startups: {str(e)}")

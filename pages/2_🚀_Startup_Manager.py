@@ -31,6 +31,9 @@ def main():
     # Initialize database connection
     db = DatabaseManager()
     
+    # Get fresh startup data
+    startups = db.get_startups()
+    
     # Sidebar navigation
     with st.sidebar:
         # Main navigation
@@ -44,23 +47,27 @@ def main():
             
             # Startup selection at the bottom
             st.subheader("Startup Selection")
-            startups = db.get_startups()
+            
             if startups:
                 startup_names = [s['name'] for s in startups]
                 
-                # Use session state to maintain selection
+                # Initialize session state if needed
                 if 'selected_startup_name' not in st.session_state:
+                    st.session_state.selected_startup_name = startup_names[0]
+                elif st.session_state.selected_startup_name not in startup_names:
                     st.session_state.selected_startup_name = startup_names[0]
                 
                 selected_startup_name = st.selectbox(
                     "Select Startup",
                     startup_names,
                     index=startup_names.index(st.session_state.selected_startup_name),
-                    label_visibility="collapsed"
+                    key='startup_selector'
                 )
                 
-                # Update session state when selection changes
-                st.session_state.selected_startup_name = selected_startup_name
+                # Update session state
+                if selected_startup_name != st.session_state.selected_startup_name:
+                    st.session_state.selected_startup_name = selected_startup_name
+                    st.session_state.selected_startup = next(s for s in startups if s['name'] == selected_startup_name)
                 
                 # Create new startup button below the selection
                 if st.button("Create New Startup"):
@@ -139,117 +146,104 @@ def main():
     
     # Get selected startup data
     if startups:
-        # Clear cached data when startup selection changes
-        if 'selected_startup_name' in st.session_state and st.session_state.selected_startup_name != selected_startup_name:
-            st.session_state.selected_startup = None
+        # Get fresh startup data every time
+        selected_startup = next(s for s in startups if s['name'] == st.session_state.selected_startup_name)
+        startup_id = selected_startup['id']
         
-        # Update selected startup in session state
-        st.session_state.selected_startup_name = selected_startup_name
+        # Main content area
+        st.title("🚀 Startup Manager")
+        st.caption("Step 2: Manage your startup information and documents")
         
-        # Get fresh startup data
-        selected_startup = next(s for s in startups if s['name'] == selected_startup_name)
-        startup_id = selected_startup['id']  # Get the startup ID
-    else:
-        return
-    
-    # Main content area
-    st.title("🚀 Startup Manager")
-    st.caption("Step 2: Manage your startup information and documents")
-    
-    # Startup Information Section
-    with st.container():
-        st.subheader("Startup Information")
-        
-        # Name and Pitch in two columns
-        col1, col2 = st.columns(2)
-        with col1:
-            startup_name = st.text_input(
-                "Startup Name", 
-                value=selected_startup_name,
-                disabled=True
-            )
+        # Startup Information Section
+        with st.container():
+            st.subheader("Startup Information")
             
-            # Change industry to text input
-            industry = st.text_input(
-                "Industry",
-                value=selected_startup.get('industry', ''),
-                placeholder="e.g., AI/ML, Healthcare, Fintech"
-            )
+            # Name and Pitch in two columns
+            col1, col2 = st.columns(2)
+            with col1:
+                startup_name = st.text_input(
+                    "Startup Name", 
+                    value=selected_startup['name'],
+                    disabled=True
+                )
+                
+                industry = st.text_input(
+                    "Industry",
+                    value=selected_startup.get('industry', ''),
+                    placeholder="e.g., AI/ML, Healthcare, Fintech"
+                )
+                
+                stage_options = [
+                    "Not specified",
+                    "Pre-seed",
+                    "Seed",
+                    "Series A",
+                    "Series B",
+                    "Series C",
+                    "Series D+",
+                    "Growth"
+                ]
+                stage = st.selectbox(
+                    "Stage",
+                    stage_options,
+                    index=stage_options.index(selected_startup.get('stage', 'Not specified'))
+                )
+                
+                location = st.text_input(
+                    "Location",
+                    value=selected_startup.get('location', ''),
+                    placeholder="e.g., San Francisco, CA"
+                )
             
-            # Add stage field
-            stage_options = [
-                "Not specified",
-                "Pre-seed",
-                "Seed",
-                "Series A",
-                "Series B",
-                "Series C",
-                "Series D+",
-                "Growth"
-            ]
-            stage = st.selectbox(
-                "Stage",
-                stage_options,
-                index=stage_options.index(selected_startup.get('stage', 'Not specified'))
-            )
-            
-            # Add location field
-            location = st.text_input(
-                "Location",
-                value=selected_startup.get('location', ''),
-                placeholder="e.g., San Francisco, CA"
-            )
-        
-        with col2:
-            # Add one-sentence pitch field with larger height
-            pitch = st.text_area(
-                "One-Sentence Pitch",
-                value=selected_startup.get('pitch', ''),
-                help="Describe what your startup does (up to 400 characters)",
-                max_chars=400,
-                height=300,
-                placeholder="e.g., We provide AI-powered analytics for small businesses"
-            )
-            
-            # Save all fields button
-            if st.button("Save Changes"):
-                try:
-                    # Save current startup name for reselection
-                    current_startup_name = selected_startup_name
-                    
-                    # Update all fields in one operation
-                    updated_startup = db.update_startup_info(
-                        startup_id,
-                        {
-                            'pitch': pitch,
-                            'industry': industry,
-                            'stage': stage,
-                            'location': location
-                        }
-                    )
-                    
-                    if updated_startup:
-                        st.success("Changes saved successfully!")
+            with col2:
+                pitch = st.text_area(
+                    "One-Sentence Pitch",
+                    value=selected_startup.get('pitch', ''),
+                    help="Describe what your startup does (up to 400 characters)",
+                    max_chars=400,
+                    height=300,
+                    placeholder="e.g., We provide AI-powered analytics for small businesses"
+                )
+                
+                # Save all fields button
+                if st.button("Save Changes"):
+                    try:
+                        # Save current startup name for reselection
+                        current_startup_name = selected_startup['name']
                         
-                        # Store the current startup name in session state
-                        st.session_state.selected_startup_name = current_startup_name
+                        # Update all fields in one operation
+                        updated_startup = db.update_startup_info(
+                            startup_id,
+                            {
+                                'pitch': pitch,
+                                'industry': industry,
+                                'stage': stage,
+                                'location': location
+                            }
+                        )
                         
-                        # Show which fields were updated
-                        if industry != selected_startup.get('industry', ''):
-                            st.info("Industry updated")
-                        if stage != selected_startup.get('stage', ''):
-                            st.info("Stage updated")
-                        if location != selected_startup.get('location', ''):
-                            st.info("Location updated")
-                        if pitch != selected_startup.get('pitch', ''):
-                            st.info("Pitch updated")
-                        
-                        # Use a shorter delay
-                        time.sleep(0.5)
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Error saving changes: {str(e)}")
-                    logger.error(f"Error saving startup changes: {str(e)}")
+                        if updated_startup:
+                            st.success("Changes saved successfully!")
+                            
+                            # Store the current startup name in session state
+                            st.session_state.selected_startup_name = current_startup_name
+                            
+                            # Show which fields were updated
+                            if industry != selected_startup.get('industry', ''):
+                                st.info("Industry updated")
+                            if stage != selected_startup.get('stage', ''):
+                                st.info("Stage updated")
+                            if location != selected_startup.get('location', ''):
+                                st.info("Location updated")
+                            if pitch != selected_startup.get('pitch', ''):
+                                st.info("Pitch updated")
+                            
+                            # Use a shorter delay
+                            time.sleep(0.5)
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Error saving changes: {str(e)}")
+                        logger.error(f"Error saving startup changes: {str(e)}")
     
     st.divider()
     
