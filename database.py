@@ -40,10 +40,22 @@ class DatabaseManager:
         """Get all startups"""
         try:
             logger.info("Fetching all startups from database")
+            # Get the table schema first
+            schema_response = self.supabase.table("startups").select("*").limit(0).execute()
+            logger.info(f"Table schema: {schema_response}")
+            
+            # Now get the actual data
             response = self.supabase.table("startups").select("*").execute()
             logger.info(f"Retrieved {len(response.data)} startups")
+            logger.info("Full response data:")
             for startup in response.data:
-                logger.info(f"Startup data: {startup}")
+                logger.info(f"Startup ID: {startup.get('id')}")
+                logger.info(f"Name: {startup.get('name')}")
+                logger.info(f"Pitch: {startup.get('pitch')}")
+                logger.info(f"Industry: {startup.get('industry')}")
+                logger.info(f"Stage: {startup.get('stage')}")
+                logger.info(f"Location: {startup.get('location')}")
+                logger.info("---")
             return response.data
         except Exception as e:
             logger.error(f"Error fetching startups: {str(e)}")
@@ -166,19 +178,25 @@ class DatabaseManager:
     def update_startup_info(self, startup_id: str, info: Dict[str, str]) -> Dict:
         """Update startup information including pitch, industry, stage, and location"""
         try:
-            # For now, only update the pitch until we add the new columns
-            update_data = {"pitch": info.get('pitch', '')}
+            # Log the current data before update
+            current = self.supabase.table("startups").select("*").eq("id", startup_id).execute()
+            logger.info(f"Current startup data before update: {current.data[0] if current.data else 'No data'}")
+            
+            # Validate and sanitize input
+            valid_fields = ['pitch', 'industry', 'stage', 'location']
+            update_data = {k: str(v) for k, v in info.items() if k in valid_fields}
             
             # Log the update attempt
-            logger.info(f"Updating startup {startup_id} with pitch")
+            logger.info(f"Attempting to update startup {startup_id} with data: {update_data}")
             
-            # Update pitch only for now
+            # Update all fields in a single operation
             response = self.supabase.table("startups").update(update_data).eq("id", startup_id).execute()
             
             if not response.data:
                 raise Exception("No data returned from update operation")
-                
-            logger.info(f"Successfully updated startup {startup_id}")
+            
+            # Log the response
+            logger.info(f"Update response: {response.data[0]}")
             return response.data[0]
             
         except Exception as e:
