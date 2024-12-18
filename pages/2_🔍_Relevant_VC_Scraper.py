@@ -101,8 +101,8 @@ class IndustryAnalysisAgent:
     async def _extract_industry_terms(self, startup_data: Dict[str, str]) -> List[str]:
         prompt = f"""You are an AI trained to analyze startup information and extract relevant industry terms.
         
-        Based on the following startup information, provide a JSON array of relevant industry terms and categories.
-        The response should be ONLY a valid JSON array of strings, nothing else.
+        Based on the following startup information, provide a JSON object with an array of relevant industry terms and categories.
+        The response should be ONLY a valid JSON object with a 'terms' array, nothing else.
 
         Startup Information:
         Industry: {startup_data['industry']}
@@ -110,18 +110,16 @@ class IndustryAnalysisAgent:
         Stage: {startup_data['stage']}
         
         Example response format:
-        ["term1", "term2", "term3"]
+        {{
+            "terms": ["term1", "term2", "term3"]
+        }}
         """
         
         try:
             response = await self._get_gpt4_response(prompt)
-            # Clean the response and ensure it's valid JSON
-            response = response.strip()
-            if not response.startswith('['):
-                response = '[' + response
-            if not response.endswith(']'):
-                response = response + ']'
-            return json.loads(response)
+            # Parse the JSON response
+            response_json = json.loads(response.strip())
+            return response_json.get('terms', [startup_data['industry']])
         except json.JSONDecodeError as e:
             logger.error(f"Error parsing GPT-4 response: {response}")
             # Return a basic array with the industry if parsing fails
@@ -176,11 +174,14 @@ class IndustryAnalysisAgent:
             return [{"name": "Analysis Failed", "value_prop": "Could not parse key players"}]
     
     async def _analyze_market(self, industry_terms: List[str], key_players: List[Dict]) -> Dict:
+        # Format key players for the prompt
+        key_players_str = ", ".join([f"{p['name']}" for p in key_players])
+        
         prompt = f"""You are an AI trained to analyze market dynamics.
         
         Analyze the market for:
         Industry Terms: {', '.join(industry_terms)}
-        Key Players: {json.dumps(key_players)}
+        Key Players: {key_players_str}
         
         Return a JSON object with market analysis.
         The response should be ONLY a valid JSON object, nothing else.
