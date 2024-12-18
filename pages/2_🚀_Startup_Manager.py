@@ -63,28 +63,13 @@ def main():
                 with st.form("create_startup_form"):
                     st.subheader("Create New Startup")
                     new_name = st.text_input("Startup Name", key="new_startup_name")
-                    new_pitch = st.text_area("One-Sentence Pitch", key="new_startup_pitch", 
-                                           help="Describe what your startup does (up to 400 characters)",
-                                           max_chars=400)
                     
                     col1, col2 = st.columns(2)
                     with col1:
-                        industry_options = [
-                            "Not specified",
-                            "AI/ML",
-                            "Healthcare",
-                            "Fintech",
-                            "Enterprise Software",
-                            "Consumer Tech",
-                            "Hardware",
-                            "Clean Tech",
-                            "E-commerce",
-                            "Other"
-                        ]
-                        new_industry = st.selectbox(
+                        new_industry = st.text_input(
                             "Industry",
-                            industry_options,
-                            key="new_startup_industry"
+                            key="new_startup_industry",
+                            placeholder="e.g., AI/ML, Healthcare, Fintech"
                         )
                         
                         stage_options = [
@@ -102,12 +87,21 @@ def main():
                             stage_options,
                             key="new_startup_stage"
                         )
-                    
-                    with col2:
+                        
                         new_location = st.text_input(
                             "Location",
                             key="new_startup_location",
                             placeholder="e.g., San Francisco, CA"
+                        )
+                    
+                    with col2:
+                        new_pitch = st.text_area(
+                            "One-Sentence Pitch", 
+                            key="new_startup_pitch", 
+                            help="Describe what your startup does (up to 400 characters)",
+                            max_chars=400,
+                            height=300,
+                            placeholder="e.g., We provide AI-powered analytics for small businesses"
                         )
                     
                     submitted = st.form_submit_button("Create")
@@ -150,23 +144,11 @@ def main():
                 disabled=True
             )
             
-            # Add industry field
-            industry_options = [
-                "Not specified",
-                "AI/ML",
-                "Healthcare",
-                "Fintech",
-                "Enterprise Software",
-                "Consumer Tech",
-                "Hardware",
-                "Clean Tech",
-                "E-commerce",
-                "Other"
-            ]
-            industry = st.selectbox(
+            # Change industry to text input
+            industry = st.text_input(
                 "Industry",
-                industry_options,
-                index=industry_options.index(selected_startup.get('industry', 'Not specified'))
+                value=selected_startup.get('industry', ''),
+                placeholder="e.g., AI/ML, Healthcare, Fintech"
             )
             
             # Add stage field
@@ -194,13 +176,13 @@ def main():
             )
         
         with col2:
-            # Add one-sentence pitch field
+            # Add one-sentence pitch field with larger height
             pitch = st.text_area(
                 "One-Sentence Pitch",
                 value=selected_startup.get('pitch', ''),
                 help="Describe what your startup does (up to 400 characters)",
                 max_chars=400,
-                height=100,
+                height=300,  # Increased height to match the left side
                 placeholder="e.g., We provide AI-powered analytics for small businesses"
             )
             
