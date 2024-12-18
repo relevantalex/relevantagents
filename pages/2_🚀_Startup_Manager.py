@@ -69,35 +69,37 @@ def main():
                     
                     col1, col2 = st.columns(2)
                     with col1:
+                        industry_options = [
+                            "Not specified",
+                            "AI/ML",
+                            "Healthcare",
+                            "Fintech",
+                            "Enterprise Software",
+                            "Consumer Tech",
+                            "Hardware",
+                            "Clean Tech",
+                            "E-commerce",
+                            "Other"
+                        ]
                         new_industry = st.selectbox(
                             "Industry",
-                            options=[
-                                "Not specified",
-                                "AI/ML",
-                                "Healthcare",
-                                "Fintech",
-                                "Enterprise Software",
-                                "Consumer Tech",
-                                "Hardware",
-                                "Clean Tech",
-                                "E-commerce",
-                                "Other"
-                            ],
+                            industry_options,
                             key="new_startup_industry"
                         )
                         
+                        stage_options = [
+                            "Not specified",
+                            "Pre-seed",
+                            "Seed",
+                            "Series A",
+                            "Series B",
+                            "Series C",
+                            "Series D+",
+                            "Growth"
+                        ]
                         new_stage = st.selectbox(
                             "Stage",
-                            options=[
-                                "Not specified",
-                                "Pre-seed",
-                                "Seed",
-                                "Series A",
-                                "Series B",
-                                "Series C",
-                                "Series D+",
-                                "Growth"
-                            ],
+                            stage_options,
                             key="new_startup_stage"
                         )
                     
@@ -149,39 +151,39 @@ def main():
             )
             
             # Add industry field
+            industry_options = [
+                "Not specified",
+                "AI/ML",
+                "Healthcare",
+                "Fintech",
+                "Enterprise Software",
+                "Consumer Tech",
+                "Hardware",
+                "Clean Tech",
+                "E-commerce",
+                "Other"
+            ]
             industry = st.selectbox(
                 "Industry",
-                options=[
-                    "Not specified",
-                    "AI/ML",
-                    "Healthcare",
-                    "Fintech",
-                    "Enterprise Software",
-                    "Consumer Tech",
-                    "Hardware",
-                    "Clean Tech",
-                    "E-commerce",
-                    "Other"
-                ],
-                index=0,
-                value=selected_startup.get('industry', 'Not specified')
+                industry_options,
+                index=industry_options.index(selected_startup.get('industry', 'Not specified'))
             )
             
             # Add stage field
+            stage_options = [
+                "Not specified",
+                "Pre-seed",
+                "Seed",
+                "Series A",
+                "Series B",
+                "Series C",
+                "Series D+",
+                "Growth"
+            ]
             stage = st.selectbox(
                 "Stage",
-                options=[
-                    "Not specified",
-                    "Pre-seed",
-                    "Seed",
-                    "Series A",
-                    "Series B",
-                    "Series C",
-                    "Series D+",
-                    "Growth"
-                ],
-                index=0,
-                value=selected_startup.get('stage', 'Not specified')
+                stage_options,
+                index=stage_options.index(selected_startup.get('stage', 'Not specified'))
             )
             
             # Add location field
