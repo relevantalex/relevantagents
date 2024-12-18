@@ -31,22 +31,44 @@ class VCScraper:
         self.openai_client = openai.OpenAI(api_key=openai_api_key)
 
     def find_relevant_vcs(self, startup_data: Dict[str, str]) -> List[Dict]:
-        """Find VCs that match the startup's profile"""
+        """Find VCs that match the startup's profile with broader industry matching"""
         industry = startup_data['industry']
         stage = startup_data['stage']
         
-        # Generate search queries
-        queries = [
-            f"{industry} venture capital firms {stage} stage",
-            f"VCs investing in {industry} startups",
-            f"top {industry} investors {stage} stage",
-            f"{industry} focused venture capital"
-        ]
+        # Get broader industry terms using GPT-4
+        broader_terms = self._get_broader_industry_terms(industry)
+        
+        # Generate search queries with broader scope
+        queries = []
+        
+        # Add direct industry queries
+        queries.extend([
+            f"{industry} investors",
+            f"{industry} venture capital",
+            f"VCs investing {industry}",
+            f"top {industry} venture capital firms"
+        ])
+        
+        # Add broader industry queries
+        for term in broader_terms:
+            queries.extend([
+                f"{term} investors",
+                f"{term} venture capital",
+                f"VCs investing {term}"
+            ])
+        
+        # Add stage-specific queries if stage is provided
+        if stage and stage.lower() not in ['not specified', 'unknown']:
+            queries.extend([
+                f"{industry} {stage} investors",
+                f"{stage} stage venture capital firms"
+            ])
         
         results = []
         for query in queries:
             try:
-                search_results = self.ddgs.text(query, max_results=5)
+                # Increase max_results for broader coverage
+                search_results = self.ddgs.text(query, max_results=10)
                 for result in search_results:
                     if self._is_vc_result(result['title'], result['body']):
                         results.append({
@@ -56,12 +78,41 @@ class VCScraper:
                         })
             except Exception as e:
                 logger.error(f"Error searching for VCs: {str(e)}")
+                continue
         
         return self._deduplicate_results(results)
 
+    def _get_broader_industry_terms(self, industry: str) -> List[str]:
+        """Get broader and related industry terms using GPT-4"""
+        prompt = f"""
+        For the industry "{industry}", provide a JSON array of broader and related industry terms.
+        Include both broader categories and related sectors. Return only the JSON array, nothing else.
+        Example: if industry is "AI chatbots", return ["artificial intelligence", "machine learning", "conversational AI", "enterprise software", "natural language processing", "SaaS"]
+        """
+        
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                messages=[
+                    {"role": "system", "content": "You are an expert at understanding industry categories and related sectors."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format={ "type": "json_object" }
+            )
+            
+            result = json.loads(response.choices[0].message.content)
+            return result.get('terms', [industry])
+        except Exception as e:
+            logger.error(f"Error getting broader industry terms: {str(e)}")
+            return [industry]
+
     def _is_vc_result(self, title: str, body: str) -> bool:
-        """Check if search result is likely a VC firm"""
-        vc_terms = ['venture', 'capital', 'vc', 'investor', 'investment']
+        """Check if search result is likely a VC firm with broader matching"""
+        vc_terms = [
+            'venture', 'capital', 'vc', 'investor', 'investment',
+            'fund', 'equity', 'portfolio', 'startup', 'ventures',
+            'partners', 'capital partners', 'investments'
+        ]
         text = (title + ' ' + body).lower()
         return any(term in text for term in vc_terms)
 
