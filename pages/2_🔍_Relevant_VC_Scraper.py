@@ -35,86 +35,185 @@ class VCScraper:
         industry = startup_data['industry']
         stage = startup_data['stage']
         
-        # Get broader industry terms using GPT-4
-        broader_terms = self._get_broader_industry_terms(industry)
-        
-        # Generate search queries with broader scope
-        queries = []
-        
-        # Add direct industry queries
-        queries.extend([
-            f"{industry} investors",
-            f"{industry} venture capital",
-            f"VCs investing {industry}",
-            f"top {industry} venture capital firms"
-        ])
-        
-        # Add broader industry queries
-        for term in broader_terms:
-            queries.extend([
-                f"{term} investors",
-                f"{term} venture capital",
-                f"VCs investing {term}"
-            ])
-        
-        # Add stage-specific queries if stage is provided
-        if stage and stage.lower() not in ['not specified', 'unknown']:
-            queries.extend([
-                f"{industry} {stage} investors",
-                f"{stage} stage venture capital firms"
-            ])
-        
         results = []
-        for query in queries:
-            try:
-                # Increase max_results for broader coverage
-                search_results = self.ddgs.text(query, max_results=10)
-                for result in search_results:
-                    if self._is_vc_result(result['title'], result['body']):
-                        results.append({
-                            'name': result['title'],
-                            'description': result['body'],
-                            'url': result['link']
-                        })
-            except Exception as e:
-                logger.error(f"Error searching for VCs: {str(e)}")
-                continue
         
-        return self._deduplicate_results(results)
+        # 1. Search Unicorn Nest
+        st.info("Searching Unicorn Nest database...")
+        unicorn_results = self._search_unicorn_nest(industry)
+        results.extend(unicorn_results)
+        
+        # 2. Web Search with very loose filters
+        st.info("Performing web search...")
+        web_results = self._broad_web_search(industry, stage)
+        results.extend(web_results)
+        
+        # Deduplicate results
+        unique_results = self._deduplicate_results(results)
+        
+        st.info(f"Found {len(unique_results)} potential VCs")
+        return unique_results
+
+    def _search_unicorn_nest(self, industry: str) -> List[Dict]:
+        """Search VCs on Unicorn Nest"""
+        try:
+            # Base URL for Unicorn Nest funds
+            base_url = "https://unicorn-nest.com/funds/"
+            
+            # Make request to get the page
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+            }
+            
+            # Try different search variations
+            results = []
+            search_terms = [industry] + industry.split()  # Split industry into individual words
+            
+            for term in search_terms:
+                try:
+                    search_url = f"{base_url}?search={term}"
+                    response = requests.get(search_url, headers=headers, timeout=10)
+                    if response.status_code == 200:
+                        soup = BeautifulSoup(response.text, 'html.parser')
+                        
+                        # Find fund entries
+                        fund_elements = soup.find_all('div', class_='fund-card')  # Adjust class based on actual HTML
+                        
+                        for fund in fund_elements:
+                            try:
+                                name = fund.find('h3').text.strip()
+                                description = fund.find('p', class_='description').text.strip()
+                                url = "https://unicorn-nest.com" + fund.find('a')['href']
+                                
+                                results.append({
+                                    'name': name,
+                                    'description': description,
+                                    'url': url,
+                                    'source': 'Unicorn Nest'
+                                })
+                            except Exception as e:
+                                continue
+                except Exception as e:
+                    logger.error(f"Error searching Unicorn Nest term {term}: {str(e)}")
+                    continue
+                    
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error accessing Unicorn Nest: {str(e)}")
+            return []
+
+    def _broad_web_search(self, industry: str, stage: str) -> List[Dict]:
+        """Perform a broad web search for VCs with very loose filters"""
+        try:
+            # Get broader industry terms
+            broader_terms = self._get_broader_industry_terms(industry)
+            
+            # Generate very broad queries
+            queries = []
+            
+            # Industry-based queries
+            base_terms = [industry] + broader_terms
+            for term in base_terms:
+                queries.extend([
+                    f"{term} investors",
+                    f"{term} VC",
+                    f"venture capital {term}",
+                    f"investment firms {term}",
+                    "top venture capital firms",
+                    "active venture capital investors",
+                    "technology investors",
+                    "startup investors"
+                ])
+            
+            results = []
+            for query in queries:
+                try:
+                    # Increase max_results significantly
+                    search_results = self.ddgs.text(query, max_results=20)
+                    
+                    if not search_results:
+                        st.warning(f"No results found for query: {query}")
+                        continue
+                        
+                    for result in search_results:
+                        # Very loose filtering - accept almost anything that might be a VC
+                        if not self._is_obviously_not_vc(result['title'], result['body']):
+                            results.append({
+                                'name': result['title'],
+                                'description': result['body'],
+                                'url': result['link'],
+                                'source': 'Web Search'
+                            })
+                except Exception as e:
+                    logger.error(f"Error in web search for query '{query}': {str(e)}")
+                    continue
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error in broad web search: {str(e)}")
+            return []
+
+    def _is_obviously_not_vc(self, title: str, body: str) -> bool:
+        """Very loose check - only filter out obvious non-VCs"""
+        # Convert to lower case for comparison
+        text = (title + ' ' + body).lower()
+        
+        # List of terms that indicate this is definitely not a VC
+        obvious_non_vc = [
+            'wikipedia',
+            'dictionary',
+            'definition',
+            '.gov',
+            'news article',
+            'press release'
+        ]
+        
+        return any(term in text for term in obvious_non_vc)
 
     def _get_broader_industry_terms(self, industry: str) -> List[str]:
-        """Get broader and related industry terms using GPT-4"""
+        """Get much broader industry terms"""
         prompt = f"""
-        For the industry "{industry}", provide a JSON array of broader and related industry terms.
-        Include both broader categories and related sectors. Return only the JSON array, nothing else.
-        Example: if industry is "AI chatbots", return ["artificial intelligence", "machine learning", "conversational AI", "enterprise software", "natural language processing", "SaaS"]
+        For the industry "{industry}", provide a JSON object with an array of related terms.
+        Include:
+        1. The industry itself
+        2. Broader categories
+        3. Related sectors
+        4. Technology areas
+        5. Market segments
+        6. Generic terms like "technology", "software", "digital"
+        
+        Format: {{"terms": ["term1", "term2", ...]}}
         """
         
         try:
             response = self.openai_client.chat.completions.create(
                 model="gpt-4-turbo-preview",
                 messages=[
-                    {"role": "system", "content": "You are an expert at understanding industry categories and related sectors."},
+                    {"role": "system", "content": "You are an expert at understanding industry categories and related sectors. Be comprehensive and include broader terms."},
                     {"role": "user", "content": prompt}
                 ],
                 response_format={ "type": "json_object" }
             )
             
             result = json.loads(response.choices[0].message.content)
-            return result.get('terms', [industry])
+            terms = result.get('terms', [industry])
+            
+            # Add some generic tech investment terms
+            terms.extend([
+                "technology",
+                "software",
+                "digital",
+                "innovation",
+                "startup",
+                "tech company"
+            ])
+            
+            return list(set(terms))  # Remove duplicates
         except Exception as e:
             logger.error(f"Error getting broader industry terms: {str(e)}")
-            return [industry]
-
-    def _is_vc_result(self, title: str, body: str) -> bool:
-        """Check if search result is likely a VC firm with broader matching"""
-        vc_terms = [
-            'venture', 'capital', 'vc', 'investor', 'investment',
-            'fund', 'equity', 'portfolio', 'startup', 'ventures',
-            'partners', 'capital partners', 'investments'
-        ]
-        text = (title + ' ' + body).lower()
-        return any(term in text for term in vc_terms)
+            return [industry, "technology", "software", "startup"]
 
     def _deduplicate_results(self, results: List[Dict]) -> List[Dict]:
         """Remove duplicate VC firms"""
