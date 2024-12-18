@@ -8,9 +8,8 @@ if [ "$1" ]; then
     # If message was passed as argument, use it
     message="$1"
 else
-    # Otherwise, prompt for a message
-    echo "Enter commit message:"
-    read message
+    # Use default message with timestamp
+    message="update $(date '+%Y-%m-%d %H:%M:%S')"
 fi
 
 # Commit with the message
