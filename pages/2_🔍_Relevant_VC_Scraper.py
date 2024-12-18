@@ -11,392 +11,158 @@ import time
 import json
 from duckduckgo_search import DDGS
 import openai
-from anthropic import Anthropic
-import random
-import asyncio
-import aiohttp
+import re
 from datetime import datetime
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class AgentStatus:
-    def __init__(self, name: str, description: str):
-        self.name = name
-        self.description = description
-        self.status = "Waiting"
-        self.progress = 0
-        self.messages = []
-        self.start_time = None
-        
-    def start(self):
-        self.status = "Running"
-        self.start_time = datetime.now()
-        
-    def complete(self):
-        self.status = "Complete"
-        self.progress = 100
-        
-    def fail(self, error: str):
-        self.status = "Failed"
-        self.messages.append({"type": "error", "content": error})
-        
-    def update_progress(self, progress: int, message: str = None):
-        self.progress = progress
-        if message:
-            self.messages.append({"type": "info", "content": message})
-            
-    def get_runtime(self) -> str:
-        if not self.start_time:
-            return "Not started"
-        delta = datetime.now() - self.start_time
-        return f"{delta.seconds}s"
-
-class IndustryAnalysisAgent:
+class VCScraper:
     def __init__(self):
-        self.status = AgentStatus(
-            "Industry Analysis Agent",
-            "Analyzing industry landscape and identifying key trends"
-        )
-        # Initialize OpenAI client with API key
+        self.session = requests.Session()
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        self.ddgs = DDGS()
         openai_api_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("api_keys", {}).get("openai_api_key")
         if not openai_api_key:
-            raise ValueError("OpenAI API key not found in environment variables or Streamlit secrets")
+            raise ValueError("OpenAI API key not found")
         self.openai_client = openai.OpenAI(api_key=openai_api_key)
-    
-    async def analyze(self, startup_data: Dict[str, str]) -> Dict:
-        self.status.start()
-        try:
-            # Step 1: Extract key industry terms
-            self.status.update_progress(20, "Extracting key industry terms...")
-            industry_terms = await self._extract_industry_terms(startup_data)
-            
-            # Step 2: Research industry trends
-            self.status.update_progress(40, "Researching industry trends...")
-            industry_trends = await self._research_trends(industry_terms)
-            
-            # Step 3: Identify key players
-            self.status.update_progress(60, "Identifying key players...")
-            key_players = await self._identify_key_players(industry_terms)
-            
-            # Step 4: Analyze market dynamics
-            self.status.update_progress(80, "Analyzing market dynamics...")
-            market_dynamics = await self._analyze_market(industry_terms, key_players)
-            
-            # Complete analysis
-            self.status.complete()
-            
-            return {
-                "industry_terms": industry_terms,
-                "trends": industry_trends,
-                "key_players": key_players,
-                "market_dynamics": market_dynamics
-            }
-            
-        except Exception as e:
-            self.status.fail(str(e))
-            raise
-    
-    async def _extract_industry_terms(self, startup_data: Dict[str, str]) -> List[str]:
-        prompt = f"""You are an AI trained to analyze startup information and extract relevant industry terms.
-        
-        Based on the following startup information, provide a JSON object with an array of relevant industry terms and categories.
-        The response should be ONLY a valid JSON object with a 'terms' array, nothing else.
 
-        Startup Information:
-        Industry: {startup_data['industry']}
-        Pitch: {startup_data['pitch']}
-        Stage: {startup_data['stage']}
+    def find_relevant_vcs(self, startup_data: Dict[str, str]) -> List[Dict]:
+        """Find VCs that match the startup's profile"""
+        industry = startup_data['industry']
+        stage = startup_data['stage']
         
-        Example response format:
-        {{
-            "terms": ["term1", "term2", "term3"]
-        }}
-        """
+        # Generate search queries
+        queries = [
+            f"{industry} venture capital firms {stage} stage",
+            f"VCs investing in {industry} startups",
+            f"top {industry} investors {stage} stage",
+            f"{industry} focused venture capital"
+        ]
         
-        try:
-            response = await self._get_gpt4_response(prompt)
-            # Parse the JSON response
-            response_json = json.loads(response.strip())
-            return response_json.get('terms', [startup_data['industry']])
-        except json.JSONDecodeError as e:
-            logger.error(f"Error parsing GPT-4 response: {response}")
-            # Return a basic array with the industry if parsing fails
-            return [startup_data['industry']]
-            
-    async def _research_trends(self, industry_terms: List[str]) -> List[Dict]:
-        trends = []
-        ddgs = DDGS()
-        
-        for term in industry_terms[:3]:  # Limit to top 3 terms
+        results = []
+        for query in queries:
             try:
-                results = ddgs.news(term, max_results=5)
-                for result in results:
-                    trends.append({
-                        "term": term,
-                        "title": result['title'],
-                        "snippet": result['body'],
-                        "source": result['source'],
-                        "date": result['date']
-                    })
+                search_results = self.ddgs.text(query, max_results=5)
+                for result in search_results:
+                    if self._is_vc_result(result['title'], result['body']):
+                        results.append({
+                            'name': result['title'],
+                            'description': result['body'],
+                            'url': result['link']
+                        })
             except Exception as e:
-                logger.error(f"Error researching trends for {term}: {str(e)}")
+                logger.error(f"Error searching for VCs: {str(e)}")
         
-        return trends
-    
-    async def _identify_key_players(self, industry_terms: List[str]) -> List[Dict]:
-        prompt = f"""You are an AI trained to identify key companies in specific industries.
-        
-        For these industry terms: {', '.join(industry_terms)}
-        
-        Return a JSON object with an array of companies and their value propositions.
-        The response should be ONLY a valid JSON object, nothing else.
-        
-        Example response format:
-        {{
-            "companies": [
-                {{"name": "Company1", "value_prop": "Description1"}},
-                {{"name": "Company2", "value_prop": "Description2"}}
-            ]
-        }}
-        """
-        
+        return self._deduplicate_results(results)
+
+    def _is_vc_result(self, title: str, body: str) -> bool:
+        """Check if search result is likely a VC firm"""
+        vc_terms = ['venture', 'capital', 'vc', 'investor', 'investment']
+        text = (title + ' ' + body).lower()
+        return any(term in text for term in vc_terms)
+
+    def _deduplicate_results(self, results: List[Dict]) -> List[Dict]:
+        """Remove duplicate VC firms"""
+        seen = set()
+        unique_results = []
+        for result in results:
+            domain = urlparse(result['url']).netloc
+            if domain not in seen:
+                seen.add(domain)
+                unique_results.append(result)
+        return unique_results
+
+    def scrape_vc_info(self, vc: Dict) -> Dict:
+        """Scrape detailed information about a VC firm"""
         try:
-            response = await self._get_gpt4_response(prompt)
-            response_json = json.loads(response.strip())
-            return response_json.get('companies', [{"name": "Analysis Failed", "value_prop": "Could not parse key players"}])
-        except json.JSONDecodeError as e:
-            logger.error(f"Error parsing GPT-4 response: {response}")
-            return [{"name": "Analysis Failed", "value_prop": "Could not parse key players"}]
-    
-    async def _analyze_market(self, industry_terms: List[str], key_players: List[Dict]) -> Dict:
-        # Format key players for the prompt
-        key_players_str = ", ".join([f"{p['name']}" for p in key_players])
-        
-        prompt = f"""You are an AI trained to analyze market dynamics.
-        
-        Analyze the market for:
-        Industry Terms: {', '.join(industry_terms)}
-        Key Players: {key_players_str}
-        
-        Return a JSON object with market analysis.
-        The response should be ONLY a valid JSON object, nothing else.
-        
-        Example response format:
-        {{
-            "market_size": "Size description",
-            "growth_rate": "Growth description",
-            "key_challenges": ["Challenge 1", "Challenge 2"],
-            "opportunities": ["Opportunity 1", "Opportunity 2"]
-        }}
-        """
-        
-        try:
-            response = await self._get_gpt4_response(prompt)
-            # Clean the response and ensure it's valid JSON
-            response = response.strip()
-            if not response.startswith('{'):
-                response = '{' + response
-            if not response.endswith('}'):
-                response = response + '}'
-            return json.loads(response)
-        except json.JSONDecodeError as e:
-            logger.error(f"Error parsing GPT-4 response: {response}")
+            response = requests.get(vc['url'], headers=self.headers, timeout=10)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Extract contact information
+            emails = self._extract_emails(response.text)
+            linkedin = self._extract_linkedin_profiles(soup)
+            
+            # Extract investment focus
+            focus = self._extract_investment_focus(soup)
+            
             return {
-                "market_size": "Analysis Failed",
-                "growth_rate": "Analysis Failed",
-                "key_challenges": ["Could not parse market analysis"],
-                "opportunities": ["Could not parse market analysis"]
+                **vc,
+                'emails': emails,
+                'linkedin_profiles': linkedin,
+                'investment_focus': focus
             }
-    
-    async def _get_gpt4_response(self, prompt: str) -> str:
+        except Exception as e:
+            logger.error(f"Error scraping VC info: {str(e)}")
+            return vc
+
+    def _extract_emails(self, text: str) -> List[str]:
+        """Extract email addresses from text"""
+        email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+        return list(set(re.findall(email_pattern, text)))
+
+    def _extract_linkedin_profiles(self, soup) -> List[str]:
+        """Extract LinkedIn profile URLs"""
+        linkedin_links = []
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            if 'linkedin.com/in/' in href:
+                linkedin_links.append(href)
+        return list(set(linkedin_links))
+
+    def _extract_investment_focus(self, soup) -> str:
+        """Extract investment focus information"""
+        # Look for common sections that might contain investment focus
+        focus_keywords = ['investment', 'focus', 'strategy', 'thesis']
+        text_blocks = []
+        
+        for keyword in focus_keywords:
+            elements = soup.find_all(['p', 'div', 'section'], 
+                                  string=re.compile(keyword, re.I))
+            for element in elements:
+                text_blocks.append(element.get_text().strip())
+        
+        return ' '.join(text_blocks)[:500] if text_blocks else ""
+
+    def generate_outreach_email(self, vc_info: Dict, startup_data: Dict) -> str:
+        """Generate a personalized outreach email"""
+        prompt = f"""
+        Create a concise, personalized email to a VC.
+        
+        VC Firm: {vc_info['name']}
+        VC Focus: {vc_info.get('investment_focus', 'Not available')}
+        
+        Startup:
+        Name: {startup_data['name']}
+        Industry: {startup_data['industry']}
+        Stage: {startup_data['stage']}
+        Pitch: {startup_data['pitch']}
+        
+        Requirements:
+        1. Keep it under 200 words
+        2. Mention specific alignment with VC's focus
+        3. Include key metrics or achievements
+        4. End with a clear call to action
+        5. Mention that a one-pager is attached
+        
+        Return only the email text, no subject line.
+        """
+        
         try:
-            response = await asyncio.to_thread(
-                self.openai_client.chat.completions.create,
+            response = self.openai_client.chat.completions.create(
                 model="gpt-4-turbo-preview",
                 messages=[
-                    {"role": "system", "content": "You are an expert industry analyst AI. Always respond with valid JSON only, no additional text."},
+                    {"role": "system", "content": "You are an expert at writing concise, effective VC outreach emails."},
                     {"role": "user", "content": prompt}
-                ],
-                response_format={ "type": "json_object" }
+                ]
             )
-            return response.choices[0].message.content
+            return response.choices[0].message.content.strip()
         except Exception as e:
-            logger.error(f"Error getting GPT-4 response: {str(e)}")
-            raise
-
-def display_agent_status(agent_status: AgentStatus):
-    """Display a cool agent status interface"""
-    with st.container():
-        # Title with emoji
-        st.markdown(f"""
-        <div style='padding: 10px; border-radius: 5px; margin-bottom: 10px; background-color: #1E1E1E;'>
-            <h3 style='margin: 0; color: #00FF00;'>🤖 {agent_status.name}</h3>
-            <p style='margin: 0; color: #888888;'>{agent_status.description}</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Status and Progress
-        cols = st.columns([1, 2, 1])
-        
-        # Status indicator
-        with cols[0]:
-            status_color = {
-                "Waiting": "⚪️",
-                "Running": "🔵",
-                "Complete": "🟢",
-                "Failed": "🔴"
-            }
-            st.markdown(f"""
-            <div style='text-align: center;'>
-                <h2 style='margin: 0;'>{status_color[agent_status.status]}</h2>
-                <p style='margin: 0; color: #888888;'>{agent_status.status}</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # Progress bar
-        with cols[1]:
-            st.progress(agent_status.progress)
-            if agent_status.status == "Running":
-                st.markdown(f"""
-                <div style='text-align: center; color: #00FF00;'>
-                    {agent_status.progress}% Complete
-                </div>
-                """, unsafe_allow_html=True)
-        
-        # Runtime
-        with cols[2]:
-            st.markdown(f"""
-            <div style='text-align: center;'>
-                <h3 style='margin: 0;'>⏱️</h3>
-                <p style='margin: 0; color: #888888;'>{agent_status.get_runtime()}</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # Messages with typing animation
-        if agent_status.messages:
-            st.markdown("""
-            <style>
-            @keyframes typing {
-                0% { width: 0 }
-                100% { width: 100% }
-            }
-            .typing-animation {
-                overflow: hidden;
-                white-space: nowrap;
-                animation: typing 2s steps(40, end);
-            }
-            </style>
-            """, unsafe_allow_html=True)
-            
-            for msg in agent_status.messages[-3:]:  # Show last 3 messages
-                if msg["type"] == "error":
-                    st.markdown(f"""
-                    <div style='padding: 10px; border-radius: 5px; margin: 5px 0; background-color: #FF000022;'>
-                        ❌ <span class="typing-animation">{msg["content"]}</span>
-                    </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    st.markdown(f"""
-                    <div style='padding: 10px; border-radius: 5px; margin: 5px 0; background-color: #00FF0022;'>
-                        💡 <span class="typing-animation">{msg["content"]}</span>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-async def find_relevant_vcs(startup_data: Dict[str, any]):
-    """Find relevant VCs through multi-agent analysis"""
-    
-    # Create a container for the agent status
-    status_container = st.empty()
-    
-    try:
-        # Initialize Industry Analysis Agent
-        industry_agent = IndustryAnalysisAgent()
-        
-        # Display initial status
-        with status_container:
-            display_agent_status(industry_agent.status)
-        
-        # Run Industry Analysis
-        industry_analysis = await industry_agent.analyze(startup_data)
-        
-        # Update final status
-        with status_container:
-            display_agent_status(industry_agent.status)
-        
-        if industry_agent.status.status == "Complete":
-            # Display industry analysis results in a modern card layout
-            st.markdown("""
-            <div style='padding: 20px; border-radius: 10px; margin: 20px 0; background-color: #1E1E1E;'>
-                <h2 style='color: #00FF00; margin-bottom: 20px;'>🎯 Industry Analysis Results</h2>
-            """, unsafe_allow_html=True)
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("### 🏷️ Key Industry Terms")
-                for term in industry_analysis.get("industry_terms", []):
-                    st.markdown(f"""
-                    <div style='padding: 5px 10px; background-color: #00FF0022; border-radius: 15px; margin: 5px 0;'>
-                        {term}
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                st.markdown("### 🏢 Key Players")
-                for player in industry_analysis.get("key_players", []):
-                    st.markdown(f"""
-                    <div style='padding: 10px; background-color: #1E1E1E; border-radius: 5px; margin: 10px 0;'>
-                        <strong style='color: #00FF00;'>{player.get('name', 'Unknown')}</strong><br>
-                        {player.get('value_prop', 'No description available')}
-                    </div>
-                    """, unsafe_allow_html=True)
-            
-            with col2:
-                st.markdown("### 📈 Recent Trends")
-                for trend in industry_analysis.get("trends", [])[:3]:
-                    st.markdown(f"""
-                    <div style='padding: 10px; background-color: #1E1E1E; border-radius: 5px; margin: 10px 0;'>
-                        <strong style='color: #00FF00;'>{trend.get('title', 'Unknown')}</strong><br>
-                        <small style='color: #888888;'>Source: {trend.get('source', 'Unknown')} ({trend.get('date', 'Unknown')})</small>
-                    </div>
-                    """, unsafe_allow_html=True)
-            
-            market = industry_analysis.get("market_dynamics", {})
-            st.markdown("### 🌍 Market Dynamics")
-            cols = st.columns(2)
-            with cols[0]:
-                st.markdown(f"""
-                <div style='padding: 10px; background-color: #1E1E1E; border-radius: 5px; margin: 10px 0;'>
-                    <strong style='color: #00FF00;'>Market Size</strong><br>
-                    {market.get('market_size', 'Unknown')}
-                </div>
-                """, unsafe_allow_html=True)
-            
-            with cols[1]:
-                st.markdown(f"""
-                <div style='padding: 10px; background-color: #1E1E1E; border-radius: 5px; margin: 10px 0;'>
-                    <strong style='color: #00FF00;'>Growth Rate</strong><br>
-                    {market.get('growth_rate', 'Unknown')}
-                </div>
-                """, unsafe_allow_html=True)
-            
-            st.markdown("#### Key Challenges")
-            for challenge in market.get('key_challenges', []):
-                st.markdown(f"- {challenge}")
-            
-            st.markdown("#### Opportunities")
-            for opportunity in market.get('opportunities', []):
-                st.markdown(f"- {opportunity}")
-            
-            st.markdown("</div>", unsafe_allow_html=True)
-            
-            # Continue with next phase...
-            st.info("Industry analysis complete! Ready for VC matching phase...")
-            
-    except Exception as e:
-        st.error(f"Error during analysis: {str(e)}")
-        logger.error(f"Analysis error: {str(e)}")
+            logger.error(f"Error generating email: {str(e)}")
+            return ""
 
 def load_startup_data() -> Dict[str, any]:
     """Load startup data from the database"""
@@ -440,36 +206,11 @@ def main():
     st.set_page_config(
         page_title="Relevant VC Scraper",
         page_icon="🔍",
-        layout="wide",
-        initial_sidebar_state="expanded"
+        layout="wide"
     )
     
-    # Custom CSS for better styling
-    st.markdown("""
-    <style>
-    .stProgress > div > div > div > div {
-        background-color: #00FF00;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-    
     st.title("🔍 Relevant VC Scraper")
-    st.markdown("""
-    <p style='font-size: 1.2em; color: #888888;'>
-        Intelligent multi-agent system for finding your perfect VC match
-    </p>
-    """, unsafe_allow_html=True)
-    
-    # Check for OpenAI API key
-    if not (os.getenv("OPENAI_API_KEY") or st.secrets.get("api_keys", {}).get("openai_api_key")):
-        st.error("""
-        ⚠️ OpenAI API key is missing!
-        
-        Please set your OpenAI API key in one of these ways:
-        1. Add it to your environment variables as OPENAI_API_KEY
-        2. Add it to your Streamlit secrets.toml file under [api_keys] openai_api_key
-        """)
-        return
+    st.caption("Find and reach out to the perfect VCs for your startup")
     
     # Load startup data
     startup_data = load_startup_data()
@@ -484,9 +225,80 @@ def main():
     st.write(f"**Location:** {startup_data['location']}")
     st.write(f"**Pitch:** {startup_data['pitch']}")
     
-    # Start analysis button
-    if st.button("🚀 Start Deep Analysis", use_container_width=True):
-        asyncio.run(find_relevant_vcs(startup_data))
+    # Initialize scraper
+    scraper = VCScraper()
+    
+    # Start search button
+    if st.button("🔎 Find Matching VCs", use_container_width=True):
+        with st.spinner("Searching for relevant VCs..."):
+            # Find relevant VCs
+            vcs = scraper.find_relevant_vcs(startup_data)
+            
+            if not vcs:
+                st.warning("No matching VCs found. Try adjusting your startup profile.")
+                return
+            
+            # Process each VC
+            results = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            for idx, vc in enumerate(vcs):
+                progress = (idx + 1) / len(vcs)
+                progress_bar.progress(progress)
+                status_text.text(f"Processing {vc['name']}...")
+                
+                # Scrape detailed info
+                vc_info = scraper.scrape_vc_info(vc)
+                
+                # Generate outreach email
+                outreach_email = scraper.generate_outreach_email(vc_info, startup_data)
+                
+                results.append({
+                    **vc_info,
+                    'outreach_email': outreach_email
+                })
+            
+            progress_bar.empty()
+            status_text.empty()
+            
+            # Display results
+            st.subheader("📊 Results")
+            
+            for vc in results:
+                with st.expander(f"🏢 {vc['name']}", expanded=False):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.write("**Website:**", vc['url'])
+                        st.write("**Description:**", vc['description'])
+                        if vc.get('investment_focus'):
+                            st.write("**Investment Focus:**", vc['investment_focus'])
+                    
+                    with col2:
+                        if vc.get('emails'):
+                            st.write("**Contact Emails:**")
+                            for email in vc['emails']:
+                                st.write(f"- {email}")
+                        
+                        if vc.get('linkedin_profiles'):
+                            st.write("**LinkedIn Profiles:**")
+                            for profile in vc['linkedin_profiles']:
+                                st.write(f"- {profile}")
+                    
+                    st.write("**📧 Suggested Outreach Email:**")
+                    st.text_area("Email Text", vc['outreach_email'], height=200, key=f"email_{vc['name']}")
+            
+            # Create downloadable results
+            df = pd.DataFrame(results)
+            csv = df.to_csv(index=False)
+            st.download_button(
+                "📥 Download Results as CSV",
+                csv,
+                "vc_outreach_list.csv",
+                "text/csv",
+                key='download-csv'
+            )
 
 if __name__ == "__main__":
     main()
