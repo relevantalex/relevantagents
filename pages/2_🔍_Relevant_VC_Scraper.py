@@ -150,25 +150,22 @@ class IndustryAnalysisAgent:
         
         For these industry terms: {', '.join(industry_terms)}
         
-        Return a JSON array of objects with the top companies and their value propositions.
-        The response should be ONLY a valid JSON array, nothing else.
+        Return a JSON object with an array of companies and their value propositions.
+        The response should be ONLY a valid JSON object, nothing else.
         
         Example response format:
-        [
-            {{"name": "Company1", "value_prop": "Description1"}},
-            {{"name": "Company2", "value_prop": "Description2"}}
-        ]
+        {{
+            "companies": [
+                {{"name": "Company1", "value_prop": "Description1"}},
+                {{"name": "Company2", "value_prop": "Description2"}}
+            ]
+        }}
         """
         
         try:
             response = await self._get_gpt4_response(prompt)
-            # Clean the response and ensure it's valid JSON
-            response = response.strip()
-            if not response.startswith('['):
-                response = '[' + response
-            if not response.endswith(']'):
-                response = response + ']'
-            return json.loads(response)
+            response_json = json.loads(response.strip())
+            return response_json.get('companies', [{"name": "Analysis Failed", "value_prop": "Could not parse key players"}])
         except json.JSONDecodeError as e:
             logger.error(f"Error parsing GPT-4 response: {response}")
             return [{"name": "Analysis Failed", "value_prop": "Could not parse key players"}]
@@ -232,75 +229,167 @@ class IndustryAnalysisAgent:
 def display_agent_status(agent_status: AgentStatus):
     """Display a cool agent status interface"""
     with st.container():
-        col1, col2, col3 = st.columns([1, 2, 1])
+        # Title with emoji
+        st.markdown(f"""
+        <div style='padding: 10px; border-radius: 5px; margin-bottom: 10px; background-color: #1E1E1E;'>
+            <h3 style='margin: 0; color: #00FF00;'>🤖 {agent_status.name}</h3>
+            <p style='margin: 0; color: #888888;'>{agent_status.description}</p>
+        </div>
+        """, unsafe_allow_html=True)
         
-        with col1:
+        # Status and Progress
+        cols = st.columns([1, 2, 1])
+        
+        # Status indicator
+        with cols[0]:
             status_color = {
                 "Waiting": "⚪️",
                 "Running": "🔵",
                 "Complete": "🟢",
                 "Failed": "🔴"
             }
-            st.write(f"{status_color[agent_status.status]} **{agent_status.name}**")
+            st.markdown(f"""
+            <div style='text-align: center;'>
+                <h2 style='margin: 0;'>{status_color[agent_status.status]}</h2>
+                <p style='margin: 0; color: #888888;'>{agent_status.status}</p>
+            </div>
+            """, unsafe_allow_html=True)
         
-        with col2:
+        # Progress bar
+        with cols[1]:
             st.progress(agent_status.progress)
+            if agent_status.status == "Running":
+                st.markdown(f"""
+                <div style='text-align: center; color: #00FF00;'>
+                    {agent_status.progress}% Complete
+                </div>
+                """, unsafe_allow_html=True)
         
-        with col3:
-            st.write(f"⏱️ {agent_status.get_runtime()}")
+        # Runtime
+        with cols[2]:
+            st.markdown(f"""
+            <div style='text-align: center;'>
+                <h3 style='margin: 0;'>⏱️</h3>
+                <p style='margin: 0; color: #888888;'>{agent_status.get_runtime()}</p>
+            </div>
+            """, unsafe_allow_html=True)
         
-        # Display messages with cool formatting
-        for msg in agent_status.messages[-3:]:  # Show last 3 messages
-            if msg["type"] == "error":
-                st.error(msg["content"])
-            else:
-                st.info(msg["content"])
+        # Messages with typing animation
+        if agent_status.messages:
+            st.markdown("""
+            <style>
+            @keyframes typing {
+                0% { width: 0 }
+                100% { width: 100% }
+            }
+            .typing-animation {
+                overflow: hidden;
+                white-space: nowrap;
+                animation: typing 2s steps(40, end);
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            for msg in agent_status.messages[-3:]:  # Show last 3 messages
+                if msg["type"] == "error":
+                    st.markdown(f"""
+                    <div style='padding: 10px; border-radius: 5px; margin: 5px 0; background-color: #FF000022;'>
+                        ❌ <span class="typing-animation">{msg["content"]}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                    <div style='padding: 10px; border-radius: 5px; margin: 5px 0; background-color: #00FF0022;'>
+                        💡 <span class="typing-animation">{msg["content"]}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
 
 async def find_relevant_vcs(startup_data: Dict[str, any]):
     """Find relevant VCs through multi-agent analysis"""
     
-    # Initialize agents
-    industry_agent = IndustryAnalysisAgent()
-    
-    # Create status container
+    # Create a container for the agent status
     status_container = st.empty()
     
     try:
+        # Initialize Industry Analysis Agent
+        industry_agent = IndustryAnalysisAgent()
+        
+        # Display initial status
+        with status_container:
+            display_agent_status(industry_agent.status)
+        
         # Run Industry Analysis
         industry_analysis = await industry_agent.analyze(startup_data)
         
-        # Update status display
+        # Update final status
         with status_container:
             display_agent_status(industry_agent.status)
         
         if industry_agent.status.status == "Complete":
-            # Display industry analysis results
-            st.subheader("🎯 Industry Analysis Results")
+            # Display industry analysis results in a modern card layout
+            st.markdown("""
+            <div style='padding: 20px; border-radius: 10px; margin: 20px 0; background-color: #1E1E1E;'>
+                <h2 style='color: #00FF00; margin-bottom: 20px;'>🎯 Industry Analysis Results</h2>
+            """, unsafe_allow_html=True)
             
             col1, col2 = st.columns(2)
             
             with col1:
-                st.write("**Key Industry Terms:**")
-                for term in industry_analysis["industry_terms"]:
-                    st.write(f"- {term}")
+                st.markdown("### 🏷️ Key Industry Terms")
+                for term in industry_analysis.get("industry_terms", []):
+                    st.markdown(f"""
+                    <div style='padding: 5px 10px; background-color: #00FF0022; border-radius: 15px; margin: 5px 0;'>
+                        {term}
+                    </div>
+                    """, unsafe_allow_html=True)
                 
-                st.write("**Key Players:**")
-                for player in industry_analysis["key_players"]:
-                    st.write(f"- **{player['name']}**: {player['value_prop']}")
+                st.markdown("### 🏢 Key Players")
+                for player in industry_analysis.get("key_players", []):
+                    st.markdown(f"""
+                    <div style='padding: 10px; background-color: #1E1E1E; border-radius: 5px; margin: 10px 0;'>
+                        <strong style='color: #00FF00;'>{player.get('name', 'Unknown')}</strong><br>
+                        {player.get('value_prop', 'No description available')}
+                    </div>
+                    """, unsafe_allow_html=True)
             
             with col2:
-                st.write("**Recent Trends:**")
-                for trend in industry_analysis["trends"][:3]:
-                    st.write(f"- **{trend['title']}**")
-                    st.caption(f"Source: {trend['source']} ({trend['date']})")
+                st.markdown("### 📈 Recent Trends")
+                for trend in industry_analysis.get("trends", [])[:3]:
+                    st.markdown(f"""
+                    <div style='padding: 10px; background-color: #1E1E1E; border-radius: 5px; margin: 10px 0;'>
+                        <strong style='color: #00FF00;'>{trend.get('title', 'Unknown')}</strong><br>
+                        <small style='color: #888888;'>Source: {trend.get('source', 'Unknown')} ({trend.get('date', 'Unknown')})</small>
+                    </div>
+                    """, unsafe_allow_html=True)
             
-            st.write("**Market Dynamics:**")
-            market = industry_analysis["market_dynamics"]
-            st.write(f"- Market Size: {market['market_size']}")
-            st.write(f"- Growth Rate: {market['growth_rate']}")
-            st.write("- Key Challenges:")
-            for challenge in market['key_challenges']:
-                st.write(f"  - {challenge}")
+            market = industry_analysis.get("market_dynamics", {})
+            st.markdown("### 🌍 Market Dynamics")
+            cols = st.columns(2)
+            with cols[0]:
+                st.markdown(f"""
+                <div style='padding: 10px; background-color: #1E1E1E; border-radius: 5px; margin: 10px 0;'>
+                    <strong style='color: #00FF00;'>Market Size</strong><br>
+                    {market.get('market_size', 'Unknown')}
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with cols[1]:
+                st.markdown(f"""
+                <div style='padding: 10px; background-color: #1E1E1E; border-radius: 5px; margin: 10px 0;'>
+                    <strong style='color: #00FF00;'>Growth Rate</strong><br>
+                    {market.get('growth_rate', 'Unknown')}
+                </div>
+                """, unsafe_allow_html=True)
+            
+            st.markdown("#### Key Challenges")
+            for challenge in market.get('key_challenges', []):
+                st.markdown(f"- {challenge}")
+            
+            st.markdown("#### Opportunities")
+            for opportunity in market.get('opportunities', []):
+                st.markdown(f"- {opportunity}")
+            
+            st.markdown("</div>", unsafe_allow_html=True)
             
             # Continue with next phase...
             st.info("Industry analysis complete! Ready for VC matching phase...")
@@ -351,11 +440,25 @@ def main():
     st.set_page_config(
         page_title="Relevant VC Scraper",
         page_icon="🔍",
-        layout="wide"
+        layout="wide",
+        initial_sidebar_state="expanded"
     )
     
+    # Custom CSS for better styling
+    st.markdown("""
+    <style>
+    .stProgress > div > div > div > div {
+        background-color: #00FF00;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
     st.title("🔍 Relevant VC Scraper")
-    st.caption("Intelligent multi-agent system for finding your perfect VC match")
+    st.markdown("""
+    <p style='font-size: 1.2em; color: #888888;'>
+        Intelligent multi-agent system for finding your perfect VC match
+    </p>
+    """, unsafe_allow_html=True)
     
     # Check for OpenAI API key
     if not (os.getenv("OPENAI_API_KEY") or st.secrets.get("api_keys", {}).get("openai_api_key")):
