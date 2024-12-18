@@ -47,82 +47,95 @@ def main():
             startups = db.get_startups()
             if startups:
                 startup_names = [s['name'] for s in startups]
-                selected_startup_name = st.selectbox("Select Startup", startup_names, label_visibility="collapsed")
+                
+                # Use session state to maintain selection
+                if 'selected_startup_name' not in st.session_state:
+                    st.session_state.selected_startup_name = startup_names[0]
+                
+                selected_startup_name = st.selectbox(
+                    "Select Startup",
+                    startup_names,
+                    index=startup_names.index(st.session_state.selected_startup_name),
+                    label_visibility="collapsed"
+                )
+                
+                # Update session state when selection changes
+                st.session_state.selected_startup_name = selected_startup_name
+                
+                # Create new startup button below the selection
+                if st.button("Create New Startup"):
+                    st.session_state.show_create_startup = True
+                    st.session_state.new_startup_name = ""
+                    st.session_state.new_startup_pitch = ""
+                    st.session_state.new_startup_industry = "Not specified"
+                    st.session_state.new_startup_stage = "Not specified"
+                    st.session_state.new_startup_location = ""
+
+                # Show create startup form if button was clicked
+                if getattr(st.session_state, 'show_create_startup', False):
+                    with st.form("create_startup_form"):
+                        st.subheader("Create New Startup")
+                        new_name = st.text_input("Startup Name", key="new_startup_name")
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            new_industry = st.text_input(
+                                "Industry",
+                                key="new_startup_industry",
+                                placeholder="e.g., AI/ML, Healthcare, Fintech"
+                            )
+                            
+                            stage_options = [
+                                "Not specified",
+                                "Pre-seed",
+                                "Seed",
+                                "Series A",
+                                "Series B",
+                                "Series C",
+                                "Series D+",
+                                "Growth"
+                            ]
+                            new_stage = st.selectbox(
+                                "Stage",
+                                stage_options,
+                                key="new_startup_stage"
+                            )
+                            
+                            new_location = st.text_input(
+                                "Location",
+                                key="new_startup_location",
+                                placeholder="e.g., San Francisco, CA"
+                            )
+                        
+                        with col2:
+                            new_pitch = st.text_area(
+                                "One-Sentence Pitch", 
+                                key="new_startup_pitch", 
+                                help="Describe what your startup does (up to 400 characters)",
+                                max_chars=400,
+                                height=300,
+                                placeholder="e.g., We provide AI-powered analytics for small businesses"
+                            )
+                        
+                        submitted = st.form_submit_button("Create")
+                        if submitted:
+                            if new_name:
+                                startup = db.create_startup(
+                                    name=new_name,
+                                    pitch=new_pitch,
+                                    industry=new_industry,
+                                    stage=new_stage,
+                                    location=new_location
+                                )
+                                st.success(f"Created startup: {new_name}")
+                                st.session_state.show_create_startup = False
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error("Please enter a startup name")
             else:
                 st.warning("No startups found. Create one first!")
                 return
-            
-            # Create new startup button below the selection
-            if st.button("Create New Startup"):
-                st.session_state.show_create_startup = True
-                st.session_state.new_startup_name = ""
-                st.session_state.new_startup_pitch = ""
-                st.session_state.new_startup_industry = "Not specified"
-                st.session_state.new_startup_stage = "Not specified"
-                st.session_state.new_startup_location = ""
-
-            # Show create startup form if button was clicked
-            if getattr(st.session_state, 'show_create_startup', False):
-                with st.form("create_startup_form"):
-                    st.subheader("Create New Startup")
-                    new_name = st.text_input("Startup Name", key="new_startup_name")
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        new_industry = st.text_input(
-                            "Industry",
-                            key="new_startup_industry",
-                            placeholder="e.g., AI/ML, Healthcare, Fintech"
-                        )
-                        
-                        stage_options = [
-                            "Not specified",
-                            "Pre-seed",
-                            "Seed",
-                            "Series A",
-                            "Series B",
-                            "Series C",
-                            "Series D+",
-                            "Growth"
-                        ]
-                        new_stage = st.selectbox(
-                            "Stage",
-                            stage_options,
-                            key="new_startup_stage"
-                        )
-                        
-                        new_location = st.text_input(
-                            "Location",
-                            key="new_startup_location",
-                            placeholder="e.g., San Francisco, CA"
-                        )
-                    
-                    with col2:
-                        new_pitch = st.text_area(
-                            "One-Sentence Pitch", 
-                            key="new_startup_pitch", 
-                            help="Describe what your startup does (up to 400 characters)",
-                            max_chars=400,
-                            height=300,
-                            placeholder="e.g., We provide AI-powered analytics for small businesses"
-                        )
-                    
-                    submitted = st.form_submit_button("Create")
-                    if submitted:
-                        if new_name:
-                            startup = db.create_startup(
-                                name=new_name,
-                                pitch=new_pitch,
-                                industry=new_industry,
-                                stage=new_stage,
-                                location=new_location
-                            )
-                            st.success(f"Created startup: {new_name}")
-                            st.session_state.show_create_startup = False
-                            time.sleep(1)
-                            st.rerun()
-                        else:
-                            st.error("Please enter a startup name")
     
     # Get selected startup data
     if startups:
@@ -193,8 +206,11 @@ def main():
             # Save all fields button
             if st.button("Save Changes"):
                 try:
-                    # First try to update all fields
-                    db.update_startup_info(
+                    # Save current startup name for reselection
+                    current_startup_name = selected_startup_name
+                    
+                    # Update all fields in one operation
+                    updated_startup = db.update_startup_info(
                         startup_id,
                         {
                             'pitch': pitch,
@@ -204,20 +220,25 @@ def main():
                         }
                     )
                     
-                    st.success("Changes saved successfully!")
-                    
-                    # Show which fields were updated
-                    if industry != selected_startup.get('industry', ''):
-                        st.info("Industry updated")
-                    if stage != selected_startup.get('stage', ''):
-                        st.info("Stage updated")
-                    if location != selected_startup.get('location', ''):
-                        st.info("Location updated")
-                    if pitch != selected_startup.get('pitch', ''):
-                        st.info("Pitch updated")
-                    
-                    time.sleep(1)
-                    st.rerun()
+                    if updated_startup:
+                        st.success("Changes saved successfully!")
+                        
+                        # Store the current startup name in session state
+                        st.session_state.selected_startup_name = current_startup_name
+                        
+                        # Show which fields were updated
+                        if industry != selected_startup.get('industry', ''):
+                            st.info("Industry updated")
+                        if stage != selected_startup.get('stage', ''):
+                            st.info("Stage updated")
+                        if location != selected_startup.get('location', ''):
+                            st.info("Location updated")
+                        if pitch != selected_startup.get('pitch', ''):
+                            st.info("Pitch updated")
+                        
+                        # Use a shorter delay
+                        time.sleep(0.5)
+                        st.rerun()
                 except Exception as e:
                     st.error(f"Error saving changes: {str(e)}")
                     logger.error(f"Error saving startup changes: {str(e)}")

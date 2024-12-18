@@ -169,25 +169,15 @@ class DatabaseManager:
             # Log the update attempt
             logger.info(f"Updating startup {startup_id} with info: {update_data}")
             
-            # First update the pitch since we know that column exists
-            if 'pitch' in update_data:
-                pitch_response = self.supabase.table("startups").update({"pitch": update_data['pitch']}).eq("id", startup_id).execute()
-                if not pitch_response.data:
-                    raise Exception("No data returned from pitch update")
+            # Update all fields in a single operation
+            response = self.supabase.table("startups").update(update_data).eq("id", startup_id).execute()
             
-            # Try to update other fields if they exist
-            other_fields = {k: v for k, v in update_data.items() if k != 'pitch'}
-            if other_fields:
-                try:
-                    other_response = self.supabase.table("startups").update(other_fields).eq("id", startup_id).execute()
-                    if other_response.data:
-                        return other_response.data[0]
-                except Exception as e:
-                    logger.warning(f"Could not update additional fields: {str(e)}")
-                    # Return the pitch update response if other fields fail
-                    return pitch_response.data[0]
+            if not response.data:
+                raise Exception("No data returned from update operation")
+                
+            logger.info(f"Successfully updated startup {startup_id}")
+            return response.data[0]
             
-            return pitch_response.data[0]
         except Exception as e:
             logger.error(f"Error updating startup info: {str(e)}")
             raise Exception(f"Failed to update startup information: {str(e)}")
