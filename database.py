@@ -162,11 +162,22 @@ class DatabaseManager:
     def update_startup_info(self, startup_id: str, info: Dict[str, str]) -> Dict:
         """Update startup information including pitch, industry, stage, and location"""
         try:
-            response = self.supabase.table("startups").update(info).eq("id", startup_id).execute()
+            # Ensure all values are strings
+            sanitized_info = {k: str(v) for k, v in info.items()}
+            
+            # Log the update attempt
+            logger.info(f"Updating startup {startup_id} with info: {sanitized_info}")
+            
+            response = self.supabase.table("startups").update(sanitized_info).eq("id", startup_id).execute()
+            
+            if not response.data:
+                raise Exception("No data returned from update operation")
+            
+            logger.info(f"Successfully updated startup {startup_id}")
             return response.data[0]
         except Exception as e:
             logger.error(f"Error updating startup info: {str(e)}")
-            raise
+            raise Exception(f"Failed to update startup information: {str(e)}")
 
     @staticmethod
     def get_recommended_json_structure():

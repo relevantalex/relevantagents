@@ -124,6 +124,7 @@ def main():
     # Get selected startup data
     if startups:
         selected_startup = next(s for s in startups if s['name'] == selected_startup_name)
+        startup_id = selected_startup['id']  # Get the startup ID
     else:
         return
     
@@ -182,24 +183,27 @@ def main():
                 value=selected_startup.get('pitch', ''),
                 help="Describe what your startup does (up to 400 characters)",
                 max_chars=400,
-                height=300,  # Increased height to match the left side
+                height=300,
                 placeholder="e.g., We provide AI-powered analytics for small businesses"
             )
             
             # Save all fields button
             if st.button("Save Changes"):
-                db.update_startup_info(
-                    selected_startup['id'],
-                    {
-                        'pitch': pitch,
-                        'industry': industry,
-                        'stage': stage,
-                        'location': location
-                    }
-                )
-                st.success("Changes saved successfully!")
-                time.sleep(1)
-                st.rerun()
+                try:
+                    db.update_startup_info(
+                        startup_id,  # Use the correct startup ID
+                        {
+                            'pitch': pitch,
+                            'industry': industry,
+                            'stage': stage,
+                            'location': location
+                        }
+                    )
+                    st.success("Changes saved successfully!")
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error saving changes: {str(e)}")
     
     st.divider()
     
@@ -244,7 +248,7 @@ JSON Structure Guide:
                 name=uploaded_file.name,
                 content=file_content,
                 doc_type=doc_type,
-                startup_id=selected_startup['id']
+                startup_id=startup_id
             ):
                 st.success(f"Successfully uploaded {uploaded_file.name}")
                 st.rerun()
@@ -258,7 +262,7 @@ JSON Structure Guide:
     
     # Display existing documents
     st.header("Existing Documents")
-    docs = db.get_documents(startup_id=selected_startup['id'])
+    docs = db.get_documents(startup_id=startup_id)
     if docs:
         # Custom CSS for better card styling
         st.markdown("""
