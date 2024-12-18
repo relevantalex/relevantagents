@@ -182,9 +182,13 @@ class DatabaseManager:
             current = self.supabase.table("startups").select("*").eq("id", startup_id).execute()
             logger.info(f"Current startup data before update: {current.data[0] if current.data else 'No data'}")
             
-            # Validate and sanitize input
-            valid_fields = ['pitch', 'industry', 'stage', 'location']
-            update_data = {k: str(v) for k, v in info.items() if k in valid_fields}
+            # Always include all fields in the update, using the provided values or defaults
+            update_data = {
+                'pitch': info.get('pitch', ''),
+                'industry': info.get('industry', 'Not specified'),
+                'stage': info.get('stage', 'Not specified'),
+                'location': info.get('location', '')
+            }
             
             # Log the update attempt
             logger.info(f"Attempting to update startup {startup_id} with data: {update_data}")
