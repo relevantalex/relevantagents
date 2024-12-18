@@ -19,12 +19,15 @@ class DatabaseManager:
             logger.error(f"Error initializing Supabase client: {str(e)}")
             raise
 
-    def create_startup(self, name: str, pitch: str) -> Dict:
+    def create_startup(self, name: str, pitch: str = "", industry: str = "Not specified", stage: str = "Not specified", location: str = "") -> Dict:
         """Create a new startup entry"""
         try:
             data = {
                 "name": name,
-                "pitch": pitch
+                "pitch": pitch,
+                "industry": industry,
+                "stage": stage,
+                "location": location
             }
             response = self.supabase.table("startups").insert(data).execute()
             logger.info(f"Created startup with name: {name}")
@@ -145,6 +148,25 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error deleting document: {e}")
             return False
+
+    def update_startup_pitch(self, startup_id: str, pitch: str) -> Dict:
+        """Update a startup's pitch"""
+        try:
+            data = {"pitch": pitch}
+            response = self.supabase.table("startups").update(data).eq("id", startup_id).execute()
+            return response.data[0]
+        except Exception as e:
+            logger.error(f"Error updating startup pitch: {str(e)}")
+            raise
+
+    def update_startup_info(self, startup_id: str, info: Dict[str, str]) -> Dict:
+        """Update startup information including pitch, industry, stage, and location"""
+        try:
+            response = self.supabase.table("startups").update(info).eq("id", startup_id).execute()
+            return response.data[0]
+        except Exception as e:
+            logger.error(f"Error updating startup info: {str(e)}")
+            raise
 
     @staticmethod
     def get_recommended_json_structure():
