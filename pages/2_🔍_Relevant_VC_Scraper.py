@@ -267,44 +267,62 @@ class VCSearchAgent:
     async def _google_search(self, session: aiohttp.ClientSession, query: str, max_results: int) -> List[Dict]:
         """Execute Google Custom Search with proper error handling"""
         results = []
+        start_index = 1
+        retry_count = 0
+        max_retries = 3
+        base_wait_time = 2  # Base wait time in seconds
+
         try:
-            for start in range(1, min(max_results + 1, 101), 10):
-                url = "https://www.googleapis.com/customsearch/v1"
-                params = {
-                    'key': self.google_api_key,
-                    'cx': self.google_cx,
-                    'q': query,
-                    'start': start
-                }
-                
-                async with session.get(url, params=params) as response:
-                    if response.status == 200:
+            while len(results) < max_results and retry_count < max_retries:
+                try:
+                    params = {
+                        'key': self.google_api_key,
+                        'cx': self.google_cx,
+                        'q': query,
+                        'start': start_index,
+                        'num': min(10, max_results - len(results))
+                    }
+                    
+                    async with session.get('https://www.googleapis.com/customsearch/v1', params=params) as response:
+                        if response.status == 429 or response.status == 403:  # Rate limit or quota exceeded
+                            wait_time = base_wait_time * (2 ** retry_count)  # Exponential backoff
+                            logger.warning(f"⚠️ Rate limit reached. Waiting {wait_time} seconds before retrying...")
+                            await asyncio.sleep(wait_time)
+                            retry_count += 1
+                            continue
+                            
+                        if response.status != 200:
+                            error_content = await response.text()
+                            logger.error(f"API Error (Status {response.status}): {error_content}")
+                            break
+                            
                         data = await response.json()
-                        items = data.get('items', [])
-                        for item in items:
+                        
+                        if 'items' not in data:
+                            break
+                            
+                        for item in data['items']:
                             results.append({
-                                'title': item['title'],
+                                'title': item.get('title', ''),
                                 'description': item.get('snippet', ''),
-                                'url': item['link'],
-                                'source': self._extract_source(item['link'])
+                                'url': item.get('link', ''),
+                                'source': self._extract_source(item.get('link', ''))
                             })
-                    elif response.status == 429:  # Rate limit
-                        st.warning("⚠️ Rate limit reached. Waiting before retrying...")
-                        await asyncio.sleep(2)
-                        continue
-                    else:
-                        error_text = await response.text()
-                        st.error(f"API Error (Status {response.status}): {error_text}")
-                        break
-                
-                if not items:  # No more results
-                    break
-                
-                await asyncio.sleep(0.5)  # Respect rate limits
-                
+                            
+                        if len(data['items']) < 10:  # No more results
+                            break
+                            
+                        start_index += len(data['items'])
+                        await asyncio.sleep(1)  # Basic rate limiting
+                        
+                except Exception as e:
+                    logger.error(f"Search error: {str(e)}")
+                    retry_count += 1
+                    await asyncio.sleep(base_wait_time * (2 ** retry_count))
+                    
         except Exception as e:
-            st.error(f"Search error: {str(e)}")
-        
+            logger.error(f"Search error: {str(e)}")
+            
         return results
 
     def _extract_source(self, url: str) -> str:
@@ -349,38 +367,40 @@ class VCSearchAgent:
             1. Firm name
             2. Investment focus (especially regarding {industry})
             3. Stage preference (especially regarding {stage})
-            4. Relevance score (0-1) for {industry} industry and {stage} stage
-            5. Contact information (if available)
-            
-            Return JSON format only.
             """
 
-            response = await openai.ChatCompletion.acreate(
-                model=st.secrets["model_settings"]["openai_model"],
+            client = openai.OpenAI(
+                api_key=os.getenv("OPENAI_API_KEY") or st.secrets.get("api_keys", {}).get("openai_api_key")
+            )
+            
+            response = await client.chat.completions.create(
+                model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "You are a VC research assistant. Extract and validate VC firm information."},
+                    {"role": "system", "content": "You are a VC analyst helping to validate and extract information about venture capital firms."},
                     {"role": "user", "content": prompt}
                 ]
             )
             
-            try:
-                validation_data = json.loads(response.choices[0].message.content)
+            if response.choices and response.choices[0].message.content:
+                # Process the response and create a VCFirm object
+                content = response.choices[0].message.content
                 
-                # Only return if it's a valid VC with good relevance
-                if validation_data.get('relevance_score', 0) > 0.6:
+                # Extract information using regex or string parsing
+                name_match = re.search(r"Firm name:?\s*(.+?)(?:\n|$)", content)
+                focus_match = re.search(r"Investment focus:?\s*(.+?)(?:\n|$)", content)
+                stage_match = re.search(r"Stage preference:?\s*(.+?)(?:\n|$)", content)
+                
+                if name_match:
                     return VCFirm(
-                        name=validation_data.get('firm_name', result['title']),
+                        name=name_match.group(1).strip(),
                         url=result['url'],
-                        description=validation_data.get('investment_focus', result['description']),
-                        source=result['source'],
-                        relevance_score=validation_data.get('relevance_score', 0),
-                        stage_preference=validation_data.get('stage_preference', ''),
-                        emails=validation_data.get('contact_information', {}).get('emails', []),
-                        linkedin_profiles=validation_data.get('contact_information', {}).get('linkedin_profiles', [])
+                        description=result['description'],
+                        investment_focus=focus_match.group(1).strip() if focus_match else "",
+                        stage_preference=stage_match.group(1).strip() if stage_match else "",
+                        source=result['source']
                     )
-            except json.JSONDecodeError:
-                st.error("Failed to parse GPT-4 response")
-                
+            
+            return None
         except Exception as e:
             st.error(f"Validation error: {str(e)}")
         
