@@ -15,9 +15,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Set API keys for testing
-os.environ['GOOGLE_API_KEY'] = 'AIzaSyDWSiVosb4Gl7Emce0pJ5iO4n8lFYTiYFE'
-os.environ['GOOGLE_CX'] = 'b683efdff04c348f3'
-os.environ['OPENAI_API_KEY'] = 'your-openai-api-key'  # Add mock OpenAI API key
+os.environ['GOOGLE_API_KEY'] = 'dummy_google_api_key'
+os.environ['GOOGLE_CX'] = 'dummy_google_cx'
+os.environ['OPENAI_API_KEY'] = 'dummy_openai_api_key'
 
 class MockOpenAIResponse:
     def __init__(self, content):

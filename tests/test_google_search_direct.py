@@ -12,8 +12,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Set API keys
-os.environ['GOOGLE_API_KEY'] = 'AIzaSyDWSiVosb4Gl7Emce0pJ5iO4n8lFYTiYFE'
-os.environ['GOOGLE_CX'] = 'b683efdff04c348f3'
+os.environ['GOOGLE_API_KEY'] = 'dummy_google_api_key'
+os.environ['GOOGLE_CX'] = 'dummy_google_cx'
 
 async def google_search(query: str, max_results: int = 5) -> List[Dict]:
     """Execute Google Custom Search with proper error handling"""
