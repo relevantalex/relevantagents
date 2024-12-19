@@ -209,11 +209,11 @@ class VCSearchAgent:
         
         # Search templates for different platforms
         self.search_templates = {
-            'linkedin_company': 'site:linkedin.com/company "venture capital" "healthcare" "medical" "biotech" "{stage}"',
-            'linkedin_people': 'site:linkedin.com/in "venture capital" "partner" "healthcare" "medical" "{stage}"',
-            'wellfound': 'site:wellfound.com "venture capital" "healthcare" "medical" "biotech" "{stage}"',
-            'crunchbase': 'site:crunchbase.com/organization "venture capital" "healthcare" "medical" "{stage}"',
-            'pitchbook': 'site:pitchbook.com/profiles "venture capital" "healthcare" "{stage}"'
+            'linkedin_company': 'site:linkedin.com/company "venture capital" {industry} {stage}',
+            'linkedin_people': 'site:linkedin.com/in "venture capital" "partner" {industry} {stage}',
+            'wellfound': 'site:wellfound.com "venture capital" {industry} {stage}',
+            'crunchbase': 'site:crunchbase.com/organization "venture capital" {industry} {stage}',
+            'pitchbook': 'site:pitchbook.com/profiles "venture capital" {industry} {stage}'
         }
 
     async def search(self, industry: str, stage: str, max_results: int = 200) -> List[VCFirm]:
@@ -232,7 +232,7 @@ class VCSearchAgent:
                 for idx, (platform, template) in enumerate(self.search_templates.items()):
                     try:
                         st.write(f"Searching {platform}...")
-                        query = template.format(stage=stage)
+                        query = template.format(industry=industry, stage=stage)
                         results = await self._google_search(session, query, max_results // total_platforms)
                         if results:
                             st.write(f"✅ Found {len(results)} results from {platform}")
@@ -369,7 +369,7 @@ class VCSearchAgent:
             3. Stage preference (especially regarding {stage})
             """
 
-            client = openai.OpenAI(
+            client = openai.AsyncOpenAI(
                 api_key=os.getenv("OPENAI_API_KEY") or st.secrets.get("api_keys", {}).get("openai_api_key")
             )
             
@@ -382,7 +382,6 @@ class VCSearchAgent:
             )
             
             if response.choices and response.choices[0].message.content:
-                # Process the response and create a VCFirm object
                 content = response.choices[0].message.content
                 
                 # Extract information using regex or string parsing
@@ -402,9 +401,9 @@ class VCSearchAgent:
             
             return None
         except Exception as e:
+            logger.error(f"Validation error: {str(e)}")
             st.error(f"Validation error: {str(e)}")
-        
-        return None
+            return None
 
 class VCEnrichmentAgent:
     """Agent responsible for enriching VC data with website information"""
