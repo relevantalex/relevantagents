@@ -18,6 +18,8 @@ from dataclasses import dataclass
 import asyncio
 from tqdm import tqdm
 import aiohttp
+import ssl
+import certifi
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO)
@@ -202,40 +204,63 @@ class VCSearchAgent:
         
         # Search templates for different platforms
         self.search_templates = {
-            'linkedin_company': 'site:linkedin.com/company "{industry}" AND "venture capital" AND "{stage}"',
-            'linkedin_people': 'site:linkedin.com/in "{industry}" AND "venture capital" AND "partner" AND "{stage}"',
-            'wellfound': 'site:wellfound.com "{industry}" AND "venture capital" AND "{stage}"',
-            'crunchbase': 'site:crunchbase.com/organization "{industry}" AND "venture capital" AND "{stage}"',
-            'pitchbook': 'site:pitchbook.com/profiles "{industry}" AND "venture capital"'
+            'linkedin_company': 'site:linkedin.com/company "venture capital" "healthcare" "medical" "biotech" "{stage}"',
+            'linkedin_people': 'site:linkedin.com/in "venture capital" "partner" "healthcare" "medical" "{stage}"',
+            'wellfound': 'site:wellfound.com "venture capital" "healthcare" "medical" "biotech" "{stage}"',
+            'crunchbase': 'site:crunchbase.com/organization "venture capital" "healthcare" "medical" "{stage}"',
+            'pitchbook': 'site:pitchbook.com/profiles "venture capital" "healthcare" "{stage}"'
         }
 
     async def search(self, industry: str, stage: str, max_results: int = 200) -> List[VCFirm]:
         """Execute multi-platform search and validate results with GPT-4"""
         all_results = []
         
-        with st.spinner("🔍 Searching across multiple platforms..."):
-            # Generate search queries for each platform
-            for platform, template in self.search_templates.items():
-                query = template.format(industry=industry, stage=stage)
-                results = await self._google_search(query, max_results // len(self.search_templates))
-                all_results.extend(results)
+        # Create SSL context for API requests
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        conn = aiohttp.TCPConnector(ssl=ssl_context)
+        
+        async with aiohttp.ClientSession(connector=conn) as session:
+            with st.spinner("🔍 Searching across multiple platforms..."):
+                progress_bar = st.progress(0)
+                total_platforms = len(self.search_templates)
+                
+                for idx, (platform, template) in enumerate(self.search_templates.items()):
+                    try:
+                        st.write(f"Searching {platform}...")
+                        query = template.format(stage=stage)
+                        results = await self._google_search(session, query, max_results // total_platforms)
+                        if results:
+                            st.write(f"✅ Found {len(results)} results from {platform}")
+                            all_results.extend(results)
+                        else:
+                            st.write(f"⚠️ No results from {platform}")
+                    except Exception as e:
+                        st.error(f"Error searching {platform}: {str(e)}")
+                    progress_bar.progress((idx + 1) / total_platforms)
         
         # Deduplicate by domain
         unique_results = self._deduplicate_results(all_results)
+        st.write(f"Found {len(unique_results)} unique results after deduplication")
         
         # Validate and enrich with GPT-4
         validated_results = []
         with st.spinner("🤖 Validating and enriching VC data..."):
-            for result in unique_results:
-                enriched_vc = await self._validate_and_enrich(result, industry, stage)
-                if enriched_vc:
-                    validated_results.append(enriched_vc)
+            progress_bar = st.progress(0)
+            for idx, result in enumerate(unique_results):
+                try:
+                    enriched_vc = await self._validate_and_enrich(result, industry, stage)
+                    if enriched_vc:
+                        validated_results.append(enriched_vc)
+                        st.write(f"✅ Validated: {enriched_vc.name}")
+                except Exception as e:
+                    st.error(f"Error validating result: {str(e)}")
+                progress_bar.progress((idx + 1) / len(unique_results))
         
         st.success(f"Found {len(validated_results)} validated VC firms")
         return validated_results
 
-    async def _google_search(self, query: str, max_results: int) -> List[Dict]:
-        """Execute Google Custom Search"""
+    async def _google_search(self, session: aiohttp.ClientSession, query: str, max_results: int) -> List[Dict]:
+        """Execute Google Custom Search with proper error handling"""
         results = []
         try:
             for start in range(1, min(max_results + 1, 101), 10):
@@ -247,19 +272,33 @@ class VCSearchAgent:
                     'start': start
                 }
                 
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url, params=params) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            for item in data.get('items', []):
-                                results.append({
-                                    'title': item['title'],
-                                    'description': item.get('snippet', ''),
-                                    'url': item['link'],
-                                    'source': self._extract_source(item['link'])
-                                })
+                async with session.get(url, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        items = data.get('items', [])
+                        for item in items:
+                            results.append({
+                                'title': item['title'],
+                                'description': item.get('snippet', ''),
+                                'url': item['link'],
+                                'source': self._extract_source(item['link'])
+                            })
+                    elif response.status == 429:  # Rate limit
+                        st.warning("⚠️ Rate limit reached. Waiting before retrying...")
+                        await asyncio.sleep(2)
+                        continue
+                    else:
+                        error_text = await response.text()
+                        st.error(f"API Error (Status {response.status}): {error_text}")
+                        break
+                
+                if not items:  # No more results
+                    break
+                
+                await asyncio.sleep(0.5)  # Respect rate limits
+                
         except Exception as e:
-            logger.error(f"Google search error: {str(e)}")
+            st.error(f"Search error: {str(e)}")
         
         return results
 
@@ -292,7 +331,6 @@ class VCSearchAgent:
     async def _validate_and_enrich(self, result: Dict, industry: str, stage: str) -> Optional[VCFirm]:
         """Use GPT-4 to validate and enrich VC data"""
         try:
-            # Prepare prompt for GPT-4
             prompt = f"""
             Analyze this potential VC firm and extract relevant information:
             Title: {result['title']}
@@ -304,15 +342,14 @@ class VCSearchAgent:
 
             Please validate if this is a legitimate VC firm and extract:
             1. Firm name
-            2. Investment focus
-            3. Stage preference
-            4. Relevance score (0-1) for {industry} industry
+            2. Investment focus (especially regarding {industry})
+            3. Stage preference (especially regarding {stage})
+            4. Relevance score (0-1) for {industry} industry and {stage} stage
             5. Contact information (if available)
             
             Return JSON format only.
             """
 
-            # Get GPT-4 response
             response = await openai.ChatCompletion.acreate(
                 model=st.secrets["model_settings"]["openai_model"],
                 messages=[
@@ -321,7 +358,6 @@ class VCSearchAgent:
                 ]
             )
             
-            # Parse GPT-4 response
             try:
                 validation_data = json.loads(response.choices[0].message.content)
                 
@@ -338,10 +374,10 @@ class VCSearchAgent:
                         linkedin_profiles=validation_data.get('contact_information', {}).get('linkedin_profiles', [])
                     )
             except json.JSONDecodeError:
-                logger.error("Failed to parse GPT-4 response")
+                st.error("Failed to parse GPT-4 response")
                 
         except Exception as e:
-            logger.error(f"Validation error: {str(e)}")
+            st.error(f"Validation error: {str(e)}")
         
         return None
 
