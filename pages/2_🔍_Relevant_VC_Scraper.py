@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import asyncio
 from tqdm import tqdm
+import aiohttp
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO)
@@ -32,6 +33,7 @@ class VCFirm:
     linkedin_profiles: List[str] = None
     relevance_score: float = 0.0
     source: str = ""
+    stage_preference: str = ""
     
     def __post_init__(self):
         self.emails = self.emails or []
@@ -191,162 +193,157 @@ class CrunchbaseProvider:
             return []
 
 class VCSearchAgent:
-    """Agent responsible for initial VC discovery using multiple sources"""
-    def __init__(self):
-        self.search_providers = [
-            DuckDuckGoProvider(),
-            BraveSearchProvider(),
-            GoogleSearchProvider()
-        ]
-        self.crunchbase = CrunchbaseProvider()
-        self.results = []
+    """Agent responsible for discovering VCs using Google Custom Search and GPT-4 validation"""
     
+    def __init__(self):
+        self.google_api_key = st.secrets["api_keys"]["google_api_key"]
+        self.google_cx = st.secrets["api_keys"]["google_cx"]
+        self.results = []
+        
+        # Search templates for different platforms
+        self.search_templates = {
+            'linkedin_company': 'site:linkedin.com/company "{industry}" AND "venture capital" AND "{stage}"',
+            'linkedin_people': 'site:linkedin.com/in "{industry}" AND "venture capital" AND "partner" AND "{stage}"',
+            'wellfound': 'site:wellfound.com "{industry}" AND "venture capital" AND "{stage}"',
+            'crunchbase': 'site:crunchbase.com/organization "{industry}" AND "venture capital" AND "{stage}"',
+            'pitchbook': 'site:pitchbook.com/profiles "{industry}" AND "venture capital"'
+        }
+
     async def search(self, industry: str, stage: str, max_results: int = 200) -> List[VCFirm]:
+        """Execute multi-platform search and validate results with GPT-4"""
         all_results = []
         
-        # 1. Search using multiple search engines
-        search_terms = self._generate_search_terms(industry, stage)
+        with st.spinner("🔍 Searching across multiple platforms..."):
+            # Generate search queries for each platform
+            for platform, template in self.search_templates.items():
+                query = template.format(industry=industry, stage=stage)
+                results = await self._google_search(query, max_results // len(self.search_templates))
+                all_results.extend(results)
         
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = []
-            
-            # Submit search tasks for each provider and search term
-            for provider in self.search_providers:
-                for term in search_terms:
-                    futures.append(
-                        executor.submit(
-                            provider.search,
-                            term,
-                            max_results // (len(self.search_providers) * len(search_terms))
-                        )
-                    )
-            
-            # Add Crunchbase search
-            futures.append(executor.submit(self.crunchbase.search, industry))
-            
-            with st.spinner(f"🔍 Searching for VCs... (0/{len(futures)} queries complete)"):
-                for i, future in enumerate(futures):
-                    try:
-                        results = future.result()
-                        for result in results:
-                            if self._is_potential_vc(result['title'], result['description']):
-                                vc = VCFirm(
-                                    name=result['title'],
-                                    url=result['url'],
-                                    description=result['description'],
-                                    source='Search Results'
-                                )
-                                all_results.append(vc)
-                        st.spinner(f"🔍 Searching for VCs... ({i+1}/{len(futures)} queries complete)")
-                    except Exception as e:
-                        logger.error(f"Error in search: {str(e)}")
+        # Deduplicate by domain
+        unique_results = self._deduplicate_results(all_results)
         
-        # Add specialized VC database searches
-        all_results.extend(await self._search_unicorn_nest(industry))
+        # Validate and enrich with GPT-4
+        validated_results = []
+        with st.spinner("🤖 Validating and enriching VC data..."):
+            for result in unique_results:
+                enriched_vc = await self._validate_and_enrich(result, industry, stage)
+                if enriched_vc:
+                    validated_results.append(enriched_vc)
         
-        # Deduplicate results
-        seen_urls = set()
-        unique_results = []
-        for vc in all_results:
-            domain = urlparse(vc.url).netloc
-            if domain not in seen_urls:
-                seen_urls.add(domain)
-                unique_results.append(vc)
-        
-        st.success(f"Found {len(unique_results)} potential VCs across all sources")
-        return unique_results
+        st.success(f"Found {len(validated_results)} validated VC firms")
+        return validated_results
 
-    async def _search_unicorn_nest(self, industry: str) -> List[VCFirm]:
-        """Search VCs on Unicorn Nest"""
+    async def _google_search(self, query: str, max_results: int) -> List[Dict]:
+        """Execute Google Custom Search"""
         results = []
         try:
-            base_url = "https://unicorn-nest.com/funds/"
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-            
-            # Try multiple search variations
-            search_terms = [industry] + industry.split()
-            for term in search_terms:
-                try:
-                    response = requests.get(
-                        f"{base_url}?search={term}",
-                        headers=headers,
-                        timeout=10
-                    )
-                    
-                    if response.status_code == 200:
-                        soup = BeautifulSoup(response.text, 'html.parser')
-                        for fund in soup.find_all(class_='fund-card'):
-                            try:
-                                vc = VCFirm(
-                                    name=fund.find('h3').text.strip(),
-                                    url=urljoin(base_url, fund.find('a')['href']),
-                                    description=fund.find(class_='description').text.strip(),
-                                    source='Unicorn Nest'
-                                )
-                                results.append(vc)
-                            except Exception:
-                                continue
-                except Exception as e:
-                    logger.error(f"Error searching Unicorn Nest term {term}: {str(e)}")
-            
+            for start in range(1, min(max_results + 1, 101), 10):
+                url = "https://www.googleapis.com/customsearch/v1"
+                params = {
+                    'key': self.google_api_key,
+                    'cx': self.google_cx,
+                    'q': query,
+                    'start': start
+                }
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, params=params) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            for item in data.get('items', []):
+                                results.append({
+                                    'title': item['title'],
+                                    'description': item.get('snippet', ''),
+                                    'url': item['link'],
+                                    'source': self._extract_source(item['link'])
+                                })
         except Exception as e:
-            logger.error(f"Error accessing Unicorn Nest: {str(e)}")
+            logger.error(f"Google search error: {str(e)}")
         
         return results
 
-    def _generate_search_terms(self, industry: str, stage: str) -> List[str]:
-        """Generate comprehensive search terms"""
-        terms = [
-            f"{industry} venture capital",
-            f"{industry} VC firms",
-            f"{industry} investors",
-            f"top {industry} VCs",
-            f"{stage} stage {industry} investors",
-            f"{industry} focused venture capital",
-            "venture capital firms directory",
-            "VC firms database",
-            "venture capital investors list",
-            "active venture capital firms",
-            f"who invests in {industry}",
-            f"leading {industry} investors",
-            f"{industry} investment firms",
-            "technology venture capital"
-        ]
-        
-        # Add variations
-        industry_terms = industry.split()
-        for term in industry_terms:
-            terms.extend([
-                f"{term} investors",
-                f"{term} venture capital",
-                f"VCs investing in {term}",
-                f"{term} focused funds"
-            ])
-        
-        return list(set(terms))
+    def _extract_source(self, url: str) -> str:
+        """Extract the source platform from URL"""
+        domain = urlparse(url).netloc.lower()
+        if 'linkedin.com' in domain:
+            return 'LinkedIn'
+        elif 'wellfound.com' in domain:
+            return 'WellFound'
+        elif 'crunchbase.com' in domain:
+            return 'Crunchbase'
+        elif 'pitchbook.com' in domain:
+            return 'PitchBook'
+        return 'Other'
 
-    def _is_potential_vc(self, title: str, description: str) -> bool:
-        """Improved check for potential VC firms"""
-        text = (title + ' ' + description).lower()
+    def _deduplicate_results(self, results: List[Dict]) -> List[Dict]:
+        """Deduplicate results by domain"""
+        seen_domains = set()
+        unique_results = []
         
-        # Skip obvious non-VCs
-        skip_terms = [
-            'wikipedia', 'dictionary', '.gov', 'news article',
-            'press release', 'job posting', 'linkedin.com/jobs'
-        ]
-        if any(term in text for term in skip_terms):
-            return False
+        for result in results:
+            domain = urlparse(result['url']).netloc
+            if domain not in seen_domains:
+                seen_domains.add(domain)
+                unique_results.append(result)
         
-        # Check for VC-related terms
-        vc_terms = [
-            'venture', 'capital', 'vc', 'investor', 'investment',
-            'fund', 'equity', 'portfolio', 'startup', 'ventures',
-            'partners', 'investments', 'venture partners',
-            'capital partners', 'investment firm'
-        ]
-        return any(term in text for term in vc_terms)
+        return unique_results
+
+    async def _validate_and_enrich(self, result: Dict, industry: str, stage: str) -> Optional[VCFirm]:
+        """Use GPT-4 to validate and enrich VC data"""
+        try:
+            # Prepare prompt for GPT-4
+            prompt = f"""
+            Analyze this potential VC firm and extract relevant information:
+            Title: {result['title']}
+            Description: {result['description']}
+            URL: {result['url']}
+            Source: {result['source']}
+            Industry Focus: {industry}
+            Stage: {stage}
+
+            Please validate if this is a legitimate VC firm and extract:
+            1. Firm name
+            2. Investment focus
+            3. Stage preference
+            4. Relevance score (0-1) for {industry} industry
+            5. Contact information (if available)
+            
+            Return JSON format only.
+            """
+
+            # Get GPT-4 response
+            response = await openai.ChatCompletion.acreate(
+                model=st.secrets["model_settings"]["openai_model"],
+                messages=[
+                    {"role": "system", "content": "You are a VC research assistant. Extract and validate VC firm information."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            
+            # Parse GPT-4 response
+            try:
+                validation_data = json.loads(response.choices[0].message.content)
+                
+                # Only return if it's a valid VC with good relevance
+                if validation_data.get('relevance_score', 0) > 0.6:
+                    return VCFirm(
+                        name=validation_data.get('firm_name', result['title']),
+                        url=result['url'],
+                        description=validation_data.get('investment_focus', result['description']),
+                        source=result['source'],
+                        relevance_score=validation_data.get('relevance_score', 0),
+                        stage_preference=validation_data.get('stage_preference', ''),
+                        emails=validation_data.get('contact_information', {}).get('emails', []),
+                        linkedin_profiles=validation_data.get('contact_information', {}).get('linkedin_profiles', [])
+                    )
+            except json.JSONDecodeError:
+                logger.error("Failed to parse GPT-4 response")
+                
+        except Exception as e:
+            logger.error(f"Validation error: {str(e)}")
+        
+        return None
 
 class VCEnrichmentAgent:
     """Agent responsible for enriching VC data with website information"""
@@ -618,6 +615,8 @@ def display_results(vcs: List[VCFirm]):
                 st.write("**Description:**", vc.description)
                 if vc.investment_focus:
                     st.write("**Investment Focus:**", vc.investment_focus)
+                if vc.stage_preference:
+                    st.write("**Stage Preference:**", vc.stage_preference)
             
             with col2:
                 if vc.emails:
