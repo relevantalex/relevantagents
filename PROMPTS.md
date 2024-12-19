@@ -1,5 +1,15 @@
 # AI Agent Prompts and Best Practices
 
+⚠️ **CRITICAL SECURITY WARNING** ⚠️
+## NEVER EVER COMMIT API KEYS OR SECRETS
+- NEVER put API keys in code
+- NEVER commit .env files
+- NEVER share keys in documentation
+- NEVER use real keys in examples
+- ALWAYS check files before committing
+- ALWAYS use environment variables or secrets management
+- ALWAYS rotate keys if accidentally exposed
+
 ## General Guidelines
 
 ### 1. Testing and Verification
@@ -118,6 +128,50 @@ except json.JSONDecodeError:
 - Log detailed errors for debugging
 - Don't expose sensitive information in error messages
 
+## Critical Security Rules
+
+### API Key Management - READ THIS FIRST
+1. **🚫 ABSOLUTELY NO API KEYS IN CODE**
+   ```python
+   # ❌ NEVER DO THIS - SECURITY RISK!
+   api_key = "your_key_here"
+   
+   # ✅ ALWAYS DO THIS
+   api_key = st.secrets["api_keys"]["key_name"]
+   # OR
+   api_key = os.getenv("API_KEY")
+   ```
+
+2. **Pre-Commit Security Checks**
+   - Run `git diff` before every commit
+   - Use automated pre-commit hooks
+   - Review all files for secrets
+   - When in doubt, DON'T commit
+
+3. **If Keys Are Exposed:**
+   1. IMMEDIATELY revoke/delete the exposed keys
+   2. Generate new keys with restrictions
+   3. Update all services using the old keys
+   4. Clean git history
+   5. Review security practices
+
+4. **Secure Testing:**
+   ```python
+   # ❌ NEVER
+   TEST_API_KEY = "actual-api-key"
+   
+   # ✅ ALWAYS
+   TEST_API_KEY = os.getenv("TEST_API_KEY", "dummy-key")
+   ```
+
+### Security Checklist
+Before EVERY commit:
+- [ ] No API keys in code
+- [ ] No secrets in documentation
+- [ ] No .env files
+- [ ] No configuration files with real credentials
+- [ ] No test files with real keys
+
 ## Testing Checklist
 
 1. **Before Implementation**
@@ -137,3 +191,14 @@ except json.JSONDecodeError:
    - [ ] Check error handling
    - [ ] Test with various inputs
    - [ ] Verify rate limiting works
+
+## Pre-commit Checks
+```bash
+# Add to .git/hooks/pre-commit
+#!/bin/bash
+
+# Check for API keys
+if grep -r "api[_-]key.*=.*[A-Za-z0-9_-]\{20,\}" .; then
+    echo "Potential API key found. Commit rejected."
+    exit 1
+fi

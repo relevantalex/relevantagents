@@ -198,8 +198,13 @@ class VCSearchAgent:
     """Agent responsible for discovering VCs using Google Custom Search and GPT-4 validation"""
     
     def __init__(self):
-        self.google_api_key = st.secrets["api_keys"]["google_api_key"]
-        self.google_cx = st.secrets["api_keys"]["google_cx"]
+        # Try environment variables first, then fall back to Streamlit secrets
+        self.google_api_key = os.getenv("GOOGLE_API_KEY") or st.secrets.get("api_keys", {}).get("google_api_key")
+        self.google_cx = os.getenv("GOOGLE_CX") or st.secrets.get("api_keys", {}).get("google_cx")
+        
+        if not self.google_api_key or not self.google_cx:
+            raise ValueError("Google Search API credentials not found in environment variables or Streamlit secrets")
+            
         self.results = []
         
         # Search templates for different platforms

@@ -334,8 +334,8 @@ def find_competitors(industry: str, pitch: str, progress_bar) -> List[Dict]:
     
     # Initialize search providers
     search_providers = [
-        BraveSearch(api_key="BSAFYF-wl3SieZb-w4E18vNNwXldlnH"),
-        DuckDuckGoSearch()
+        DuckDuckGoSearch(),
+        BraveSearch(api_key=st.secrets["api_keys"]["brave_api_key"]),
     ]
     
     try:

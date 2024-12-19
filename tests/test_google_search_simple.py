@@ -3,10 +3,15 @@ import aiohttp
 import json
 import ssl
 import certifi
+import os
+import streamlit as st
 
-# Replace these with your actual API keys
-GOOGLE_API_KEY = "AIzaSyDI4VYTCuXkZUYmPEyyECEeBgm05mp4HJQ"
-GOOGLE_CX = "30f14153dbdfe4476"
+# Get API keys from environment or secrets
+try:
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or st.secrets["api_keys"]["google_api_key"]
+    GOOGLE_CX = os.getenv("GOOGLE_CX") or st.secrets["api_keys"]["google_cx"]
+except Exception as e:
+    raise ValueError("Please set GOOGLE_API_KEY and GOOGLE_CX in environment variables or Streamlit secrets") from e
 
 async def test_google_search(query: str):
     """Test Google Custom Search API"""
@@ -20,7 +25,7 @@ async def test_google_search(query: str):
         
         print(f"\nTesting search with query: {query}")
         print("API URL:", url)
-        print("Parameters:", json.dumps(params, indent=2))
+        print("Parameters:", json.dumps({**params, 'key': '[REDACTED]', 'cx': '[REDACTED]'}, indent=2))
         
         # Create SSL context with certifi certificates
         ssl_context = ssl.create_default_context(cafile=certifi.where())
