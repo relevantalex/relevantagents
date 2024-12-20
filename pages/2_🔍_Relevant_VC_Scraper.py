@@ -126,18 +126,24 @@ class GoogleSearchProvider(SearchProvider):
                 }
                 response = requests.get(url, params=params)
                 
-                if response.status_code == 200:
-                    data = response.json()
-                    for item in data.get('items', []):
-                        results.append({
-                            'title': item['title'],
-                            'description': item.get('snippet', ''),
-                            'url': item['link']
-                        })
-                
-                if len(results) >= max_results:
+                if response.status_code == 429:  # Rate limit exceeded
+                    retry_after = int(response.headers.get('Retry-After', 2))
+                    logger.warning(f"Rate limit exceeded. Waiting {retry_after} seconds...")
+                    time.sleep(retry_after)
+                    continue
+                    
+                if response.status_code != 200:
+                    logger.error(f"Google Search API error: {response.status}")
                     break
-            
+                    
+                data = response.json()
+                if 'items' not in data:
+                    break
+                    
+                results.extend(data['items'])
+                if len(data['items']) < 10:  # No more results
+                    break
+                    
             return results[:max_results]
         except Exception as e:
             logger.error(f"Google search error: {str(e)}")
@@ -206,6 +212,11 @@ class VCSearchAgent:
             raise ValueError("Google Search API credentials not found in environment variables or Streamlit secrets")
             
         self.results = []
+        self.cache = {}  # Simple in-memory cache
+        self.last_request_time = 0
+        self.min_request_interval = 1.0  # Minimum time between requests in seconds
+        self.max_retries = 5
+        self.base_backoff = 2
         
         # Search templates for different platforms
         self.search_templates = {
@@ -216,113 +227,148 @@ class VCSearchAgent:
             'pitchbook': 'site:pitchbook.com/profiles "venture capital" {industry} {stage}'
         }
 
+        # Initialize rate limiter
+        self.rate_limits = {
+            'google': {'requests': 0, 'window_start': time.time(), 'max_requests': 100, 'window': 100},  # 100 requests per 100 seconds
+            'website': {'requests': 0, 'window_start': time.time(), 'max_requests': 10, 'window': 10}    # 10 requests per 10 seconds
+        }
+
+    async def _wait_for_rate_limit(self, service='google'):
+        """Implement rate limiting for different services"""
+        current_time = time.time()
+        rate_limit = self.rate_limits[service]
+        
+        # Reset window if needed
+        if current_time - rate_limit['window_start'] >= rate_limit['window']:
+            rate_limit['requests'] = 0
+            rate_limit['window_start'] = current_time
+        
+        # Wait if we've hit the rate limit
+        if rate_limit['requests'] >= rate_limit['max_requests']:
+            wait_time = rate_limit['window_start'] + rate_limit['window'] - current_time
+            if wait_time > 0:
+                logger.info(f"Rate limit reached for {service}. Waiting {wait_time:.2f} seconds...")
+                await asyncio.sleep(wait_time)
+                rate_limit['requests'] = 0
+                rate_limit['window_start'] = time.time()
+        
+        rate_limit['requests'] += 1
+
     async def search(self, industry: str, stage: str, max_results: int = 200) -> List[VCFirm]:
         """Execute multi-platform search and validate results with GPT-4"""
-        all_results = []
-        
-        # Create SSL context for API requests
         ssl_context = ssl.create_default_context(cafile=certifi.where())
-        conn = aiohttp.TCPConnector(ssl=ssl_context)
+        conn = aiohttp.TCPConnector(ssl=ssl_context, limit=10)  # Limit concurrent connections
+        timeout = aiohttp.ClientTimeout(total=300)  # 5 minutes total timeout
         
-        async with aiohttp.ClientSession(connector=conn) as session:
-            with st.spinner("🔍 Searching across multiple platforms..."):
-                progress_bar = st.progress(0)
-                total_platforms = len(self.search_templates)
+        async with aiohttp.ClientSession(connector=conn, timeout=timeout) as session:
+            # Create search tasks for each template
+            search_tasks = []
+            for template_name, template in self.search_templates.items():
+                query = template.format(industry=industry, stage=stage)
+                task = asyncio.create_task(self._google_search(
+                    session,
+                    query,
+                    max_results // len(self.search_templates)
+                ))
+                search_tasks.append(task)
+            
+            # Execute all search tasks concurrently with progress tracking
+            if st.progress_bar := st.progress(0):
+                results = []
+                for i, task in enumerate(asyncio.as_completed(search_tasks), 1):
+                    batch_results = await task
+                    results.extend(batch_results)
+                    st.progress_bar.progress(i / len(search_tasks))
+            else:
+                # Fallback if not in Streamlit context
+                results = []
+                for task in asyncio.as_completed(search_tasks):
+                    batch_results = await task
+                    results.extend(batch_results)
+            
+            # Deduplicate results
+            unique_results = self._deduplicate_results(results)
+            logger.info(f"Found {len(unique_results)} unique results")
+            
+            # Process results in batches to avoid overwhelming the system
+            enriched_results = []
+            batch_size = 10
+            
+            for i in range(0, len(unique_results), batch_size):
+                batch = unique_results[i:i + batch_size]
+                enrichment_tasks = []
                 
-                for idx, (platform, template) in enumerate(self.search_templates.items()):
-                    try:
-                        st.write(f"Searching {platform}...")
-                        query = template.format(industry=industry, stage=stage)
-                        results = await self._google_search(session, query, max_results // total_platforms)
-                        if results:
-                            st.write(f"✅ Found {len(results)} results from {platform}")
-                            all_results.extend(results)
-                        else:
-                            st.write(f"⚠️ No results from {platform}")
-                    except Exception as e:
-                        st.error(f"Error searching {platform}: {str(e)}")
-                    progress_bar.progress((idx + 1) / total_platforms)
-        
-        # Deduplicate by domain
-        unique_results = self._deduplicate_results(all_results)
-        st.write(f"Found {len(unique_results)} unique results after deduplication")
-        
-        # Validate and enrich with GPT-4
-        validated_results = []
-        with st.spinner("🤖 Validating and enriching VC data..."):
-            progress_bar = st.progress(0)
-            for idx, result in enumerate(unique_results):
-                try:
-                    enriched_vc = await self._validate_and_enrich(result, industry, stage)
-                    if enriched_vc:
-                        validated_results.append(enriched_vc)
-                        st.write(f"✅ Validated: {enriched_vc.name}")
-                except Exception as e:
-                    st.error(f"Error validating result: {str(e)}")
-                progress_bar.progress((idx + 1) / len(unique_results))
-        
-        st.success(f"Found {len(validated_results)} validated VC firms")
-        return validated_results
+                for result in batch:
+                    task = asyncio.create_task(self._validate_and_enrich(result, industry, stage))
+                    enrichment_tasks.append(task)
+                
+                batch_results = await asyncio.gather(*enrichment_tasks)
+                enriched_results.extend([r for r in batch_results if r])
+            
+            self.results = enriched_results
+            return enriched_results
 
     async def _google_search(self, session: aiohttp.ClientSession, query: str, max_results: int) -> List[Dict]:
-        """Execute Google Custom Search with proper error handling"""
+        """Execute Google Custom Search with proper error handling and rate limiting"""
+        cache_key = f"{query}_{max_results}"
+        if cache_key in self.cache:
+            logger.info("Returning cached results for query")
+            return self.cache[cache_key]
+
         results = []
         start_index = 1
         retry_count = 0
-        max_retries = 3
-        base_wait_time = 2  # Base wait time in seconds
 
-        try:
-            while len(results) < max_results and retry_count < max_retries:
-                try:
-                    params = {
-                        'key': self.google_api_key,
-                        'cx': self.google_cx,
-                        'q': query,
-                        'start': start_index,
-                        'num': min(10, max_results - len(results))
-                    }
-                    
-                    async with session.get('https://www.googleapis.com/customsearch/v1', params=params) as response:
-                        if response.status == 429 or response.status == 403:  # Rate limit or quota exceeded
-                            wait_time = base_wait_time * (2 ** retry_count)  # Exponential backoff
-                            logger.warning(f"⚠️ Rate limit reached. Waiting {wait_time} seconds before retrying...")
-                            await asyncio.sleep(wait_time)
-                            retry_count += 1
-                            continue
-                            
-                        if response.status != 200:
-                            error_content = await response.text()
-                            logger.error(f"API Error (Status {response.status}): {error_content}")
-                            break
-                            
-                        data = await response.json()
+        while len(results) < max_results:
+            try:
+                await self._wait_for_rate_limit('google')
+                
+                params = {
+                    'key': self.google_api_key,
+                    'cx': self.google_cx,
+                    'q': query,
+                    'start': start_index
+                }
+                
+                async with session.get(
+                    'https://www.googleapis.com/customsearch/v1',
+                    params=params,
+                    ssl=ssl.create_default_context(cafile=certifi.where())
+                ) as response:
+                    if response.status == 429:  # Rate limit exceeded
+                        retry_after = int(response.headers.get('Retry-After', self.base_backoff ** retry_count))
+                        logger.warning(f"Rate limit exceeded. Waiting {retry_after} seconds...")
+                        await asyncio.sleep(retry_after)
+                        retry_count += 1
+                        continue
                         
-                        if 'items' not in data:
-                            break
-                            
-                        for item in data['items']:
-                            results.append({
-                                'title': item.get('title', ''),
-                                'description': item.get('snippet', ''),
-                                'url': item.get('link', ''),
-                                'source': self._extract_source(item.get('link', ''))
-                            })
-                            
-                        if len(data['items']) < 10:  # No more results
-                            break
-                            
-                        start_index += len(data['items'])
-                        await asyncio.sleep(1)  # Basic rate limiting
+                    if response.status != 200:
+                        logger.error(f"Google Search API error: {response.status}")
+                        break
                         
-                except Exception as e:
-                    logger.error(f"Search error: {str(e)}")
-                    retry_count += 1
-                    await asyncio.sleep(base_wait_time * (2 ** retry_count))
+                    data = await response.json()
+                    if 'items' not in data:
+                        break
+                        
+                    results.extend(data['items'])
+                    if len(data['items']) < 10:  # No more results
+                        break
+                        
+                    start_index += 10
+                    retry_count = 0  # Reset retry count on successful request
                     
-        except Exception as e:
-            logger.error(f"Search error: {str(e)}")
-            
+            except Exception as e:
+                logger.error(f"Error in Google Search: {str(e)}")
+                if retry_count >= self.max_retries:
+                    logger.error("Max retries reached. Stopping search.")
+                    break
+                    
+                await asyncio.sleep(self.base_backoff ** retry_count)
+                retry_count += 1
+                continue
+
+        results = results[:max_results]
+        self.cache[cache_key] = results
         return results
 
     def _extract_source(self, url: str) -> str:
@@ -411,82 +457,90 @@ class VCEnrichmentAgent:
         self.openai_client = openai.OpenAI(
             api_key=os.getenv("OPENAI_API_KEY") or st.secrets.get("api_keys", {}).get("openai_api_key")
         )
-    
-    async def enrich_vcs(self, vcs: List[VCFirm], industry: str) -> List[VCFirm]:
+        self.cache = {}
+        self.semaphore = asyncio.Semaphore(5)  # Limit concurrent requests
+        
+    async def enrich_vcs(self, vcs: List[VCFirm], industry: str):
         """Enrich VC firms with website data and relevance scores"""
-        enriched_vcs = []
-        total = len(vcs)
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        conn = aiohttp.TCPConnector(ssl=ssl_context, limit=10)
+        timeout = aiohttp.ClientTimeout(total=60)
         
-        with st.spinner("🔍 Analyzing VC websites..."):
-            progress_bar = st.progress(0)
+        async with aiohttp.ClientSession(connector=conn, timeout=timeout) as session:
+            tasks = []
+            for vc in vcs:
+                task = asyncio.create_task(self._enrich_vc(session, vc, industry))
+                tasks.append(task)
             
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                futures = []
-                for vc in vcs:
-                    futures.append(
-                        executor.submit(self._enrich_vc, vc, industry)
-                    )
-                
-                for i, future in enumerate(futures):
-                    try:
-                        enriched_vc = future.result()
-                        if enriched_vc:
-                            enriched_vcs.append(enriched_vc)
-                        progress_bar.progress((i + 1) / total)
-                    except Exception as e:
-                        logger.error(f"Error enriching VC {vcs[i].name}: {str(e)}")
-        
-        return sorted(enriched_vcs, key=lambda x: x.relevance_score, reverse=True)
-
-    def _enrich_vc(self, vc: VCFirm, industry: str) -> Optional[VCFirm]:
+            enriched_vcs = []
+            for task in asyncio.as_completed(tasks):
+                try:
+                    result = await task
+                    if result:
+                        enriched_vcs.append(result)
+                except Exception as e:
+                    logger.error(f"Error enriching VC: {str(e)}")
+            
+            return enriched_vcs
+    
+    async def _enrich_vc(self, session: aiohttp.ClientSession, vc: VCFirm, industry: str):
         """Enrich a single VC firm"""
         try:
-            # Scrape website content
-            content = self._scrape_website(vc.url)
-            if not content:
-                return None
-            
-            # Extract investment focus
-            vc.investment_focus = self._extract_investment_focus(content)
-            
-            # Calculate relevance score
-            vc.relevance_score = self._calculate_relevance(
-                vc.description + " " + vc.investment_focus,
-                industry
-            )
-            
-            return vc
+            async with self.semaphore:
+                if vc.url in self.cache:
+                    logger.info(f"Using cached data for {vc.url}")
+                    cached_data = self.cache[vc.url]
+                    vc.description = cached_data.get('description', '')
+                    vc.investment_focus = cached_data.get('investment_focus', '')
+                    vc.relevance_score = cached_data.get('relevance_score', 0.0)
+                    return vc
+                
+                content = await self._scrape_website(session, vc.url)
+                if not content:
+                    return None
+                
+                vc.description = content[:1000]  # Limit description length
+                vc.investment_focus = await self._extract_investment_focus(content)
+                vc.relevance_score = await self._calculate_relevance(content, industry)
+                
+                # Cache the results
+                self.cache[vc.url] = {
+                    'description': vc.description,
+                    'investment_focus': vc.investment_focus,
+                    'relevance_score': vc.relevance_score
+                }
+                
+                return vc
         except Exception as e:
-            logger.error(f"Error enriching {vc.name}: {str(e)}")
+            logger.error(f"Error enriching {vc.url}: {str(e)}")
             return None
-
-    def _scrape_website(self, url: str) -> Optional[str]:
-        """Scrape website content"""
+    
+    async def _scrape_website(self, session: aiohttp.ClientSession, url: str) -> str:
+        """Scrape website content with proper error handling and timeouts"""
         try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
+            async with session.get(url, timeout=20) as response:
+                if response.status != 200:
+                    return ""
+                
+                content = await response.text()
+                soup = BeautifulSoup(content, 'html.parser')
                 
                 # Remove script and style elements
                 for script in soup(["script", "style"]):
                     script.decompose()
                 
-                # Get text content
+                # Get text and clean it
                 text = soup.get_text()
                 lines = (line.strip() for line in text.splitlines())
                 chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
                 text = ' '.join(chunk for chunk in chunks if chunk)
                 
-                return text
-            return None
+                return text[:5000]  # Limit text length for processing
         except Exception as e:
             logger.error(f"Error scraping {url}: {str(e)}")
-            return None
+            return ""
 
-    def _extract_investment_focus(self, content: str) -> str:
+    async def _extract_investment_focus(self, content: str) -> str:
         """Extract investment focus from website content"""
         try:
             prompt = f"""
@@ -511,7 +565,7 @@ class VCEnrichmentAgent:
             logger.error(f"Error extracting investment focus: {str(e)}")
             return ""
 
-    def _calculate_relevance(self, vc_text: str, industry: str) -> float:
+    async def _calculate_relevance(self, vc_text: str, industry: str) -> float:
         """Calculate relevance score"""
         try:
             prompt = f"""
@@ -539,62 +593,74 @@ class VCEnrichmentAgent:
 class VCContactAgent:
     """Agent responsible for finding contact information"""
     def __init__(self):
-        pass
-    
-    async def find_contacts(self, vcs: List[VCFirm]) -> List[VCFirm]:
-        """Find contact information for VC firms"""
-        with st.spinner("📧 Finding contact information..."):
-            progress_bar = st.progress(0)
-            total = len(vcs)
-            
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                futures = []
-                for vc in vcs:
-                    futures.append(
-                        executor.submit(self._find_vc_contacts, vc)
-                    )
-                
-                for i, future in enumerate(futures):
-                    try:
-                        vc = future.result()
-                        progress_bar.progress((i + 1) / total)
-                    except Exception as e:
-                        logger.error(f"Error finding contacts: {str(e)}")
+        self.cache = {}
+        self.semaphore = asyncio.Semaphore(5)
         
-        return vcs
-
-    def _find_vc_contacts(self, vc: VCFirm) -> VCFirm:
+    async def find_contacts(self, vcs: List[VCFirm]):
+        """Find contact information for VC firms"""
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        conn = aiohttp.TCPConnector(ssl=ssl_context, limit=10)
+        timeout = aiohttp.ClientTimeout(total=60)
+        
+        async with aiohttp.ClientSession(connector=conn, timeout=timeout) as session:
+            tasks = []
+            for vc in vcs:
+                task = asyncio.create_task(self._find_vc_contacts(session, vc))
+                tasks.append(task)
+            
+            for task in asyncio.as_completed(tasks):
+                try:
+                    await task
+                except Exception as e:
+                    logger.error(f"Error finding contacts: {str(e)}")
+            
+            return vcs
+    
+    async def _find_vc_contacts(self, session: aiohttp.ClientSession, vc: VCFirm):
         """Find contacts for a single VC firm"""
         try:
-            # Get all pages to search
-            pages_to_search = self._get_contact_pages(vc.url)
-            
-            for url in pages_to_search:
-                try:
-                    response = requests.get(url, timeout=10)
-                    if response.status_code == 200:
-                        # Extract emails
-                        emails = self._extract_emails(response.text)
-                        vc.emails.extend(emails)
-                        
-                        # Extract LinkedIn profiles
-                        soup = BeautifulSoup(response.text, 'html.parser')
-                        linkedin_profiles = self._extract_linkedin_profiles(soup)
-                        vc.linkedin_profiles.extend(linkedin_profiles)
-                except Exception as e:
-                    logger.error(f"Error processing page {url}: {str(e)}")
-                    continue
-            
-            # Remove duplicates
-            vc.emails = list(set(vc.emails))
-            vc.linkedin_profiles = list(set(vc.linkedin_profiles))
-            
-            return vc
+            async with self.semaphore:
+                if vc.url in self.cache:
+                    cached_data = self.cache[vc.url]
+                    vc.emails = cached_data.get('emails', [])
+                    vc.linkedin_profiles = cached_data.get('linkedin_profiles', [])
+                    return
+                
+                contact_pages = await self._get_contact_pages(session, vc.url)
+                emails = set()
+                linkedin_profiles = set()
+                
+                for page_url in contact_pages:
+                    try:
+                        async with session.get(page_url, timeout=10) as response:
+                            if response.status != 200:
+                                continue
+                            
+                            content = await response.text()
+                            soup = BeautifulSoup(content, 'html.parser')
+                            
+                            # Extract emails
+                            page_emails = self._extract_emails(content)
+                            emails.update(page_emails)
+                            
+                            # Extract LinkedIn profiles
+                            page_profiles = self._extract_linkedin_profiles(soup)
+                            linkedin_profiles.update(page_profiles)
+                    except Exception as e:
+                        logger.error(f"Error processing contact page {page_url}: {str(e)}")
+                
+                vc.emails = list(emails)
+                vc.linkedin_profiles = list(linkedin_profiles)
+                
+                # Cache the results
+                self.cache[vc.url] = {
+                    'emails': vc.emails,
+                    'linkedin_profiles': vc.linkedin_profiles
+                }
         except Exception as e:
-            logger.error(f"Error finding contacts for {vc.name}: {str(e)}")
-            return vc
-
-    def _get_contact_pages(self, base_url: str) -> List[str]:
+            logger.error(f"Error finding contacts for {vc.url}: {str(e)}")
+    
+    async def _get_contact_pages(self, session: aiohttp.ClientSession, base_url: str) -> List[str]:
         """Get URLs of pages likely to contain contact information"""
         contact_paths = [
             '/contact', '/contact-us', '/team', '/about', '/about-us',
