@@ -273,28 +273,34 @@ class VCSearchAgent:
                 search_tasks.append(task)
             
             # Execute all search tasks concurrently with progress tracking
-            if st.progress_bar := st.progress(0):
-                results = []
+            st.write("🔍 Searching for VC firms...")
+            progress_bar = st.progress(0)
+            results = []
+            
+            if progress_bar is not None:
                 for i, task in enumerate(asyncio.as_completed(search_tasks), 1):
                     batch_results = await task
                     results.extend(batch_results)
-                    st.progress_bar.progress(i / len(search_tasks))
+                    progress_bar.progress(i / len(search_tasks))
+                    st.write(f"✓ Completed search {i} of {len(search_tasks)}")
             else:
                 # Fallback if not in Streamlit context
-                results = []
                 for task in asyncio.as_completed(search_tasks):
                     batch_results = await task
                     results.extend(batch_results)
             
             # Deduplicate results
             unique_results = self._deduplicate_results(results)
+            st.write(f"📊 Found {len(unique_results)} unique VC firms")
             logger.info(f"Found {len(unique_results)} unique results")
             
             # Process results in batches to avoid overwhelming the system
+            st.write("🔄 Enriching VC firm data...")
             enriched_results = []
             batch_size = 10
+            total_batches = (len(unique_results) + batch_size - 1) // batch_size
             
-            for i in range(0, len(unique_results), batch_size):
+            for batch_num, i in enumerate(range(0, len(unique_results), batch_size), 1):
                 batch = unique_results[i:i + batch_size]
                 enrichment_tasks = []
                 
@@ -304,6 +310,8 @@ class VCSearchAgent:
                 
                 batch_results = await asyncio.gather(*enrichment_tasks)
                 enriched_results.extend([r for r in batch_results if r])
+                progress_bar.progress(batch_num / total_batches)
+                st.write(f"✓ Processed batch {batch_num} of {total_batches}")
             
             self.results = enriched_results
             return enriched_results
