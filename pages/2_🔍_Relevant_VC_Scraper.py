@@ -201,22 +201,11 @@ class CrunchbaseProvider:
             return []
 
 class VCSearchAgent:
-    """Agent responsible for discovering VCs using Google Custom Search and GPT-4 validation"""
-    
+    """Agent responsible for discovering VCs using DuckDuckGo and GPT-4 validation"""
     def __init__(self):
-        # Try environment variables first, then fall back to Streamlit secrets
-        self.google_api_key = os.getenv("GOOGLE_API_KEY") or st.secrets.get("api_keys", {}).get("google_api_key")
-        self.google_cx = os.getenv("GOOGLE_CX") or st.secrets.get("api_keys", {}).get("google_cx")
-        
-        if not self.google_api_key or not self.google_cx:
-            raise ValueError("Google Search API credentials not found in environment variables or Streamlit secrets")
-            
         self.results = []
-        self.cache = {}  # Simple in-memory cache
-        self.last_request_time = 0
-        self.min_request_interval = 1.0  # Minimum time between requests in seconds
-        self.max_retries = 5
-        self.base_backoff = 2
+        self.cache = {}
+        self.ddgs = DDGS()
         
         # Search templates for different platforms
         self.search_templates = {
@@ -227,157 +216,88 @@ class VCSearchAgent:
             'pitchbook': 'site:pitchbook.com/profiles "venture capital" {industry} {stage}'
         }
 
-        # Initialize rate limiter
-        self.rate_limits = {
-            'google': {'requests': 0, 'window_start': time.time(), 'max_requests': 100, 'window': 100},  # 100 requests per 100 seconds
-            'website': {'requests': 0, 'window_start': time.time(), 'max_requests': 10, 'window': 10}    # 10 requests per 10 seconds
-        }
-
-    async def _wait_for_rate_limit(self, service='google'):
-        """Implement rate limiting for different services"""
-        current_time = time.time()
-        rate_limit = self.rate_limits[service]
-        
-        # Reset window if needed
-        if current_time - rate_limit['window_start'] >= rate_limit['window']:
-            rate_limit['requests'] = 0
-            rate_limit['window_start'] = current_time
-        
-        # Wait if we've hit the rate limit
-        if rate_limit['requests'] >= rate_limit['max_requests']:
-            wait_time = rate_limit['window_start'] + rate_limit['window'] - current_time
-            if wait_time > 0:
-                logger.info(f"Rate limit reached for {service}. Waiting {wait_time:.2f} seconds...")
-                await asyncio.sleep(wait_time)
-                rate_limit['requests'] = 0
-                rate_limit['window_start'] = time.time()
-        
-        rate_limit['requests'] += 1
-
-    async def search(self, industry: str, stage: str, max_results: int = 200) -> List[VCFirm]:
+    async def search(self, industry: str, stage: str, max_results: int = 200):
         """Execute multi-platform search and validate results with GPT-4"""
-        ssl_context = ssl.create_default_context(cafile=certifi.where())
-        conn = aiohttp.TCPConnector(ssl=ssl_context, limit=10)  # Limit concurrent connections
-        timeout = aiohttp.ClientTimeout(total=300)  # 5 minutes total timeout
+        st.write("🔍 Searching for VC firms...")
+        progress_bar = st.progress(0)
+        all_results = []
         
-        async with aiohttp.ClientSession(connector=conn, timeout=timeout) as session:
-            # Create search tasks for each template
-            search_tasks = []
-            for template_name, template in self.search_templates.items():
-                query = template.format(industry=industry, stage=stage)
-                task = asyncio.create_task(self._google_search(
-                    session,
-                    query,
-                    max_results // len(self.search_templates)
-                ))
-                search_tasks.append(task)
-            
-            # Execute all search tasks concurrently with progress tracking
-            st.write("🔍 Searching for VC firms...")
-            progress_bar = st.progress(0)
-            results = []
-            
-            if progress_bar is not None:
-                for i, task in enumerate(asyncio.as_completed(search_tasks), 1):
-                    batch_results = await task
-                    results.extend(batch_results)
-                    progress_bar.progress(i / len(search_tasks))
-                    st.write(f"✓ Completed search {i} of {len(search_tasks)}")
-            else:
-                # Fallback if not in Streamlit context
-                for task in asyncio.as_completed(search_tasks):
-                    batch_results = await task
-                    results.extend(batch_results)
-            
-            # Deduplicate results
-            unique_results = self._deduplicate_results(results)
-            st.write(f"📊 Found {len(unique_results)} unique VC firms")
-            logger.info(f"Found {len(unique_results)} unique results")
-            
-            # Process results in batches to avoid overwhelming the system
-            st.write("🔄 Enriching VC firm data...")
-            enriched_results = []
-            batch_size = 10
-            total_batches = (len(unique_results) + batch_size - 1) // batch_size
-            
-            for batch_num, i in enumerate(range(0, len(unique_results), batch_size), 1):
-                batch = unique_results[i:i + batch_size]
-                enrichment_tasks = []
-                
-                for result in batch:
-                    task = asyncio.create_task(self._validate_and_enrich(result, industry, stage))
-                    enrichment_tasks.append(task)
-                
-                batch_results = await asyncio.gather(*enrichment_tasks)
-                enriched_results.extend([r for r in batch_results if r])
-                progress_bar.progress(batch_num / total_batches)
-                st.write(f"✓ Processed batch {batch_num} of {total_batches}")
-            
-            self.results = enriched_results
-            return enriched_results
-
-    async def _google_search(self, session: aiohttp.ClientSession, query: str, max_results: int) -> List[Dict]:
-        """Execute Google Custom Search with proper error handling and rate limiting"""
-        cache_key = f"{query}_{max_results}"
-        if cache_key in self.cache:
-            logger.info("Returning cached results for query")
-            return self.cache[cache_key]
-
-        results = []
-        start_index = 1
-        retry_count = 0
-
-        while len(results) < max_results:
+        # Calculate results per template
+        results_per_template = max_results // len(self.search_templates)
+        
+        for idx, (platform, template) in enumerate(self.search_templates.items(), 1):
             try:
-                await self._wait_for_rate_limit('google')
+                query = template.format(industry=industry, stage=stage)
+                cache_key = f"{query}_{results_per_template}"
                 
-                params = {
-                    'key': self.google_api_key,
-                    'cx': self.google_cx,
-                    'q': query,
-                    'start': start_index
-                }
+                if cache_key in self.cache:
+                    results = self.cache[cache_key]
+                    st.write(f"📎 Using cached results for {platform}")
+                else:
+                    st.write(f"🔎 Searching {platform}...")
+                    results = await self._duckduckgo_search(query, results_per_template)
+                    self.cache[cache_key] = results
                 
-                async with session.get(
-                    'https://www.googleapis.com/customsearch/v1',
-                    params=params,
-                    ssl=ssl.create_default_context(cafile=certifi.where())
-                ) as response:
-                    if response.status == 429:  # Rate limit exceeded
-                        retry_after = int(response.headers.get('Retry-After', self.base_backoff ** retry_count))
-                        logger.warning(f"Rate limit exceeded. Waiting {retry_after} seconds...")
-                        await asyncio.sleep(retry_after)
-                        retry_count += 1
-                        continue
-                        
-                    if response.status != 200:
-                        logger.error(f"Google Search API error: {response.status}")
-                        break
-                        
-                    data = await response.json()
-                    if 'items' not in data:
-                        break
-                        
-                    results.extend(data['items'])
-                    if len(data['items']) < 10:  # No more results
-                        break
-                        
-                    start_index += 10
-                    retry_count = 0  # Reset retry count on successful request
-                    
+                if results:
+                    all_results.extend(results)
+                    st.write(f"✅ Found {len(results)} results from {platform}")
+                else:
+                    st.write(f"⚠️ No results from {platform}")
+                
+                progress_bar.progress(idx / len(self.search_templates))
+                
             except Exception as e:
-                logger.error(f"Error in Google Search: {str(e)}")
-                if retry_count >= self.max_retries:
-                    logger.error("Max retries reached. Stopping search.")
-                    break
-                    
-                await asyncio.sleep(self.base_backoff ** retry_count)
-                retry_count += 1
+                logger.error(f"Error searching {platform}: {str(e)}")
+                st.write(f"❌ Error searching {platform}")
                 continue
+        
+        # Deduplicate results
+        unique_results = self._deduplicate_results(all_results)
+        st.write(f"📊 Found {len(unique_results)} unique VC firms")
+        
+        # Process results in batches
+        st.write("🔄 Enriching VC firm data...")
+        enriched_results = []
+        batch_size = 10
+        total_batches = (len(unique_results) + batch_size - 1) // batch_size
+        
+        for batch_num, i in enumerate(range(0, len(unique_results), batch_size), 1):
+            batch = unique_results[i:i + batch_size]
+            enrichment_tasks = []
+            
+            for result in batch:
+                task = asyncio.create_task(self._validate_and_enrich(result, industry, stage))
+                enrichment_tasks.append(task)
+            
+            batch_results = await asyncio.gather(*enrichment_tasks)
+            valid_results = [r for r in batch_results if r]
+            enriched_results.extend(valid_results)
+            
+            progress_bar.progress(batch_num / total_batches)
+            st.write(f"✓ Processed batch {batch_num} of {total_batches} ({len(valid_results)} valid results)")
+        
+        self.results = enriched_results
+        return enriched_results
 
-        results = results[:max_results]
-        self.cache[cache_key] = results
-        return results
+    async def _duckduckgo_search(self, query: str, max_results: int) -> List[Dict]:
+        """Execute DuckDuckGo search with proper error handling"""
+        try:
+            results = []
+            search_results = self.ddgs.text(query, max_results=max_results)
+            
+            for result in search_results:
+                results.append({
+                    'title': result['title'],
+                    'description': result['body'],
+                    'url': result['link'],
+                    'source': self._extract_source(result['link'])
+                })
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"DuckDuckGo search error: {str(e)}")
+            return []
 
     def _extract_source(self, url: str) -> str:
         """Extract the source platform from URL"""
@@ -814,32 +734,49 @@ def load_startup_data() -> Dict[str, any]:
     return startup_data
 
 def main():
-    st.set_page_config(
-        page_title="Relevant VC Scraper",
-        page_icon="🔍",
-        layout="wide"
-    )
-    
     st.title("🔍 Relevant VC Scraper")
-    st.caption("Find and reach out to the perfect VCs for your startup")
+    st.write("Find and analyze venture capital firms relevant to your startup")
     
     # Load startup data
     startup_data = load_startup_data()
     if not startup_data:
+        st.error("❌ No startup data found. Please add your startup information first.")
         return
     
-    # Display current startup info
-    st.subheader("Current Startup Profile")
-    st.write(f"**Name:** {startup_data['name']}")
-    st.write(f"**Industry:** {startup_data['industry']}")
-    st.write(f"**Stage:** {startup_data['stage']}")
-    st.write(f"**Location:** {startup_data['location']}")
-    st.write(f"**Pitch:** {startup_data['pitch']}")
+    # Display current startup data
+    st.subheader("Current Startup Data")
+    st.write(f"🏢 Industry: {startup_data['industry']}")
+    st.write(f"📈 Stage: {startup_data['stage']}")
+    st.write(f"📍 Location: {startup_data['location']}")
     
-    # Start search button
-    if st.button("🔎 Find Matching VCs", use_container_width=True):
-        vcs = asyncio.run(find_relevant_vcs(startup_data))
-        display_results(vcs)
+    if st.button("🔎 Find Relevant VCs"):
+        search_agent = VCSearchAgent()
+        enrichment_agent = VCEnrichmentAgent()
+        contact_agent = VCContactAgent()
+        
+        try:
+            # Create event loop if it doesn't exist
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            # Run the search process
+            vcs = loop.run_until_complete(search_agent.search(
+                industry=startup_data['industry'],
+                stage=startup_data['stage']
+            ))
+            
+            if vcs:
+                st.success(f"✅ Found {len(vcs)} relevant VC firms!")
+                display_results(vcs)
+            else:
+                st.warning("⚠️ No relevant VC firms found. Try adjusting your search criteria.")
+                
+        except Exception as e:
+            st.error(f"❌ Error: {str(e)}")
+            logger.error(f"Search error: {str(e)}")
 
 if __name__ == "__main__":
     main()
